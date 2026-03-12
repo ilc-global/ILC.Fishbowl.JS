@@ -267,9 +267,9 @@ var server = http.createServer(function (req, res) {
     }
 
     // Static file serving
-    // /fb.js → js-src/fb.js
-    if (pathname === '/fb.js') {
-        serveStaticFile(res, path.join(JS_SRC_DIR, 'fb.js'));
+    // /fb/fb.js → js-src/fb/fb.js
+    if (pathname === '/fb/fb.js') {
+        serveStaticFile(res, path.join(JS_SRC_DIR, 'fb', 'fb.js'));
         return;
     }
 
@@ -303,7 +303,7 @@ server.listen(PORT, function () {
     console.log('  ─────────────────────────────────────');
     console.log('  Local:   http://localhost:' + PORT + '/');
     console.log('  API:     http://localhost:' + PORT + '/api/fb/*');
-    console.log('  fb.js:   http://localhost:' + PORT + '/fb.js');
+    console.log('  fb.js:   http://localhost:' + PORT + '/fb/fb.js');
     console.log('');
     console.log('  Test pages:');
     console.log('    http://localhost:' + PORT + '/test-web.html');

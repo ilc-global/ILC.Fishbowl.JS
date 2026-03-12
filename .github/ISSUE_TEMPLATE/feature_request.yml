@@ -1,0 +1,55 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Reminder:** Feature requests are prioritized based on impact, available resources, and customer-specific SLAs. Please also discuss with your ILC Technology support contact.
+
+  - type: dropdown
+    id: library
+    attributes:
+      label: Library
+      description: Which library would this affect?
+      options:
+        - fb.js
+        - fishbowl.js (FishbowlCSV)
+        - fishbowl.js (FishbowlJSON)
+        - Both
+        - New / Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem does this solve? What are you trying to do that you can't do today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How would you like this to work? Include code examples if possible.
+      render: javascript
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any workarounds or alternative approaches you've tried
+    validations:
+      required: false
+
+  - type: input
+    id: fishbowl-version
+    attributes:
+      label: Fishbowl Version
+      placeholder: "e.g., 26.1"
+    validations:
+      required: false

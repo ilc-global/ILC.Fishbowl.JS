@@ -5,7 +5,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'fb.js'
+      - 'fb/fb.js'
       - 'fishbowl/fishbowl.js'
 
 jobs:
@@ -26,9 +26,10 @@ jobs:
       - name: Build zip
         run: |
           mkdir -p dist
-          cp fb.js dist/
+          cp fb/fb.js dist/
           cp fishbowl/fishbowl.js dist/
-          cd dist && zip ../ILC.Fishbowl.JS-v${{ steps.version.outputs.version }}.zip fb.js fishbowl.js
+          cp LICENSE dist/
+          cd dist && zip ../ILC.Fishbowl.JS-v${{ steps.version.outputs.version }}.zip fb.js fishbowl.js LICENSE
 
       - name: Create release
         uses: softprops/action-gh-release@v2

@@ -1,0 +1,89 @@
+name: Bug Report
+description: Report a bug in fb.js or fishbowl.js
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Reminder:** Issues must also be reported to your ILC Technology support contact. GitHub issues alone may not be monitored in real time.
+
+  - type: dropdown
+    id: library
+    attributes:
+      label: Library
+      description: Which library is affected?
+      options:
+        - fb.js
+        - fishbowl.js (FishbowlCSV)
+        - fishbowl.js (FishbowlJSON)
+        - Both
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Clear summary of the bug
+      placeholder: What happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal code or steps to trigger the issue
+      placeholder: |
+        1. Call FishbowlCSV.SalesOrder({...})
+        2. Pass to FB.importCSV()
+        3. Error returned: ...
+      render: javascript
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened (include error messages if applicable)
+    validations:
+      required: true
+
+  - type: input
+    id: fishbowl-version
+    attributes:
+      label: Fishbowl Version
+      description: The Fishbowl Advanced version you are running
+      placeholder: "e.g., 26.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      description: Which adapter/environment?
+      options:
+        - JXBrowser (CloudPages plugin)
+        - Web (HTTP API)
+        - Demo (static data)
+    validations:
+      required: true
+
+  - type: input
+    id: support-ticket
+    attributes:
+      label: ILC Support Ticket (if applicable)
+      description: Reference number from your ILC Technology support contact
+      placeholder: "e.g., ILC-1234"
+    validations:
+      required: false
