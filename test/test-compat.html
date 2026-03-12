@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>fb.js — Compat / JXBrowser Test</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; background: #f5f5f5; padding: 20px; color: #333; }
+h1 { margin-bottom: 4px; font-size: 1.4em; }
+.subtitle { color: #666; margin-bottom: 16px; font-size: 0.9em; }
+.summary { padding: 12px 16px; border-radius: 6px; margin-bottom: 16px; font-weight: bold; font-size: 1.1em; }
+.summary.pass { background: #d4edda; color: #155724; }
+.summary.fail { background: #f8d7da; color: #721c24; }
+.summary.running { background: #fff3cd; color: #856404; }
+table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+th { background: #343a40; color: #fff; text-align: left; padding: 10px 12px; font-size: 0.85em; }
+td { padding: 8px 12px; border-bottom: 1px solid #eee; font-size: 0.85em; }
+tr:last-child td { border-bottom: none; }
+.pass-cell { color: #28a745; font-weight: bold; }
+.fail-cell { color: #dc3545; font-weight: bold; }
+.info { background: #e8f4fd; padding: 12px 16px; border-radius: 6px; margin-bottom: 16px; font-size: 0.85em; border-left: 4px solid #2196F3; }
+</style>
+</head>
+<body>
+
+<h1>fb.js — Compat / Fake fb_client Test</h1>
+<p class="subtitle">Tests FB.compat() globals and sync methods with a mock fb_client bridge</p>
+
+<div class="info">
+    This page creates a fake <code>window.fb_client</code> object before loading fb.js,
+    then verifies that JXBrowser auto-detection works, sync methods return expected values,
+    and <code>FB.compat()</code> installs the expected globals.
+</div>
+
+<div id="summary" class="summary running">Running tests...</div>
+
+<table>
+<thead><tr><th>#</th><th>Test</th><th>Result</th><th>Detail</th></tr></thead>
+<tbody id="results"></tbody>
+</table>
+
+<!--
+  IMPORTANT: Create window.fb_client BEFORE loading fb.js.
+  fb.js auto-detects jxbrowser if window.fb_client.runQuery exists.
+-->
+<script>
+(function () {
+    // ── Fake fb_client (simulates the Java bridge) ──────────────
+    var pluginDataStore = {};
+
+    window.fb_client = {
+        // Queries
+        runQuery: function (sql) {
+            return JSON.stringify([
+                { ID: 1, Name: "Widget A", Qty: 10 },
+                { ID: 2, Name: "Widget B", Qty: 20 }
+            ]);
+        },
+        runQueryParameters: function (sql, jsonParams) {
+            var params = JSON.parse(jsonParams);
+            return JSON.stringify([
+                { ID: 1, Name: "Param Widget", Filter: params.filter || "none" }
+            ]);
+        },
+
+        // REST / Legacy API
+        restApiCall: function (method, path, body) {
+            return JSON.stringify({ http_code: "200", response: '{"ok":true}' });
+        },
+        runApiJSON: function (type, payload) {
+            return JSON.stringify({ status: "ok", type: type });
+        },
+
+        // Imports
+        runImportCSV: function (type, csv) {
+            return JSON.stringify({ is_error: false, rows_imported: 5 });
+        },
+        runImportCSV_JSON: function (type, json) {
+            return JSON.stringify({ is_error: false, rows_imported: 3 });
+        },
+
+        // User info
+        getCompanyName: function () { return "Test Company Inc."; },
+        getUsername: function () { return "testuser"; },
+        getUserEmail: function () { return "test@company.com"; },
+        getUserId: function () { return 42; },
+        getUsersGroupIDs: function () { return ["1", "5", "10"]; },
+        hasAccessRight: function (name) { return true; },
+
+        // Context
+        getPluginName: function () { return "ILC CloudPages"; },
+        getModuleName: function () { return "Sales Order"; },
+        getObjectId: function () { return 1001; },
+
+        // Plugin data
+        getPluginData: function (group, key) {
+            return pluginDataStore[group + "::" + key] || null;
+        },
+        savePluginDataByGroup: function (group, json) {
+            var map = JSON.parse(json);
+            Object.keys(map).forEach(function (k) {
+                pluginDataStore[group + "::" + k] = map[k];
+            });
+            return true;
+        },
+        deletePluginData: function (group) {
+            Object.keys(pluginDataStore).forEach(function (k) {
+                if (k.indexOf(group + "::") === 0) delete pluginDataStore[k];
+            });
+            return true;
+        },
+
+        // UI
+        dialogStatus: function (msg) { window._lastStatus = msg; },
+        pbUpdate: function (value) { window._lastProgress = value; },
+        dialogClose: function () { window._dialogClosed = true; return true; },
+        showStatusBar: function (show) { window._statusBarVisible = show; },
+        toggleFullscreen: function () { window._fullscreenToggled = true; },
+
+        // File
+        saveDataToFile: function (title, ext, desc, b64, name, open) {
+            window._lastSaveFile = { title: title, ext: ext, name: name };
+        },
+        getResourceFileString: function (path) { return "file content for " + path; },
+        getResourceFileAsBase64: function (path) { return "ZmlsZSBjb250ZW50"; },
+
+        // Platform-only
+        hyperLink: function (module, param) { window._lastHyperLink = { module: module, param: param }; },
+        reloadObject: function () { window._reloaded = true; return true; },
+        runScheduledTask: function (name) { window._lastTask = name; },
+        previewReport: function (id, params) { window._lastPreview = { id: id, params: params }; },
+        getReportPDF: function (id, params, throwEx) { return JSON.stringify({ is_error: false, pdf_bytes: "PDFDATA" }); },
+        getMergedReportsPDF: function (dict) { return "MERGEDPDFDATA"; },
+        localPrinters: function () { return JSON.stringify({ printers: ["Printer1", "Printer2"] }); },
+        printPDF: function (printer, b64, dialog) { window._lastPrint = { printer: printer }; },
+        printReportPDF: function (printer, copies, id, params, throwEx) { window._lastPrintReport = { printer: printer, id: id }; },
+        printMergedReportsPDF: function (printer, copies, dict) { window._lastPrintMerged = { printer: printer }; },
+        printMultipleReports_JasperReports: function (dict, printer) { window._lastPrintMultiple = { printer: printer }; },
+        printZPL: function (printer, zpl) { window._lastPrintZPL = { printer: printer }; },
+
+        // Logging
+        logInformation: function (msg) { window._lastLogInfo = msg; },
+        logError: function (msg) { window._lastLogError = msg; },
+        logMessages: function () { return "2024-01-01 [INFO] test log"; },
+
+        // Timezone — 2024 bridge has this
+        getTimeForServer: function (tz) { return "2024-06-15 10:30:00"; }
+    };
+})();
+</script>
+
+<!-- Load fb.js AFTER fake fb_client is set up -->
+<script src="../fb.js"></script>
+
+<script>
+(function () {
+    var results = [];
+    var testNum = 0;
+
+    function test(name, fn) {
+        testNum++;
+        try {
+            var detail = fn();
+            results.push({ num: testNum, name: name, pass: true, detail: detail || "OK" });
+        } catch (e) {
+            results.push({ num: testNum, name: name, pass: false, detail: e.message || String(e) });
+        }
+    }
+
+    function assertEqual(actual, expected, label) {
+        if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+            throw new Error((label ? label + ": " : "") + "Expected " + JSON.stringify(expected) + ", got " + JSON.stringify(actual));
+        }
+    }
+
+    function assertType(val, type, label) {
+        if (typeof val !== type) {
+            throw new Error((label ? label + ": " : "") + "Expected type " + type + ", got " + typeof val);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Environment Detection
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.environment === 'jxbrowser'", function () {
+        assertEqual(FB.environment, "jxbrowser");
+    });
+
+    test("FB.isJXBrowser === true", function () {
+        assertEqual(FB.isJXBrowser, true);
+    });
+
+    test("FB.isWeb === false", function () {
+        assertEqual(FB.isWeb, false);
+    });
+
+    test("FB.isDemo === false", function () {
+        assertEqual(FB.isDemo, false);
+    });
+
+    test("FB.bridgeVersion === '2024' (has getTimeForServer)", function () {
+        assertEqual(FB.bridgeVersion, "2024");
+    });
+
+    test("FB.version is a string", function () {
+        assertType(FB.version, "string");
+        return FB.version;
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // Sync Data Methods
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.query() returns parsed rows", function () {
+        var rows = FB.query("SELECT * FROM Part");
+        assertEqual(Array.isArray(rows), true);
+        assertEqual(rows.length, 2);
+        assertEqual(rows[0].Name, "Widget A");
+    });
+
+    test("FB.query() with params", function () {
+        var rows = FB.query("SELECT * FROM Part WHERE id = :id", { filter: "active" });
+        assertEqual(rows.length, 1);
+        assertEqual(rows[0].Filter, "active");
+    });
+
+    test("FB.restApi() returns parsed response", function () {
+        var res = FB.restApi("GET", "/api/part");
+        assertEqual(res.http_code, "200");
+    });
+
+    test("FB.legacyApi() returns parsed response", function () {
+        var res = FB.legacyApi("GET_PART", "{}");
+        assertEqual(res.type, "GET_PART");
+    });
+
+    test("FB.importCSV() returns result", function () {
+        var res = FB.importCSV("Part", "Num,Desc\n100,Widget");
+        assertEqual(res.is_error, false);
+        assertEqual(res.rows_imported, 5);
+    });
+
+    test("FB.importCSVFromJSON() returns result", function () {
+        var res = FB.importCSVFromJSON("Part", '["row1","row2"]');
+        assertEqual(res.is_error, false);
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // Sync User/Context Methods
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.getCompanyName()", function () {
+        assertEqual(FB.getCompanyName(), "Test Company Inc.");
+    });
+
+    test("FB.getUsername()", function () {
+        assertEqual(FB.getUsername(), "testuser");
+    });
+
+    test("FB.getUserEmail()", function () {
+        assertEqual(FB.getUserEmail(), "test@company.com");
+    });
+
+    test("FB.getUserId()", function () {
+        assertEqual(FB.getUserId(), 42);
+    });
+
+    test("FB.getUserGroupIds()", function () {
+        var groups = FB.getUserGroupIds();
+        assertEqual(Array.isArray(groups), true);
+        assertEqual(groups, ["1", "5", "10"]);
+    });
+
+    test("FB.hasAccessRight()", function () {
+        assertEqual(FB.hasAccessRight("ViewSalesOrder"), true);
+    });
+
+    test("FB.getPluginName()", function () {
+        assertEqual(FB.getPluginName(), "ILC CloudPages");
+    });
+
+    test("FB.getModuleName()", function () {
+        assertEqual(FB.getModuleName(), "Sales Order");
+    });
+
+    test("FB.getObjectId()", function () {
+        assertEqual(FB.getObjectId(), 1001);
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // Sync Plugin Data
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.savePluginData() + FB.getPluginData()", function () {
+        FB.savePluginData("testGroup", { myKey: "myValue" });
+        var val = FB.getPluginData("testGroup", "myKey");
+        assertEqual(val, "myValue");
+    });
+
+    test("FB.deletePluginData()", function () {
+        FB.deletePluginData("testGroup");
+        var val = FB.getPluginData("testGroup", "myKey");
+        assertEqual(val, null);
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // UI Methods
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.setStatus() calls bridge", function () {
+        FB.setStatus("Loading...");
+        assertEqual(window._lastStatus, "Loading...");
+    });
+
+    test("FB.setProgress() calls bridge", function () {
+        FB.setProgress(75);
+        assertEqual(window._lastProgress, 75);
+    });
+
+    test("FB.saveFile() calls bridge", function () {
+        FB.saveFile("Export", "csv", "CSV Files", "dGVzdA==", "report.csv", false);
+        assertEqual(window._lastSaveFile.ext, "csv");
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // Platform-Only Methods (should work in jxbrowser)
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.hyperLink() calls bridge", function () {
+        FB.hyperLink("SalesOrder", "12345");
+        assertEqual(window._lastHyperLink.module, "SalesOrder");
+    });
+
+    test("FB.reloadObject() calls bridge", function () {
+        FB.reloadObject();
+        assertEqual(window._reloaded, true);
+    });
+
+    test("FB.getReportPDF() returns parsed result", function () {
+        var res = FB.getReportPDF(100, { soId: 1 });
+        assertEqual(res.is_error, false);
+        assertEqual(res.pdf_bytes, "PDFDATA");
+    });
+
+    test("FB.localPrinters() returns parsed result", function () {
+        var res = FB.localPrinters();
+        assertEqual(res.printers.length, 2);
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // Logging
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.log() calls bridge", function () {
+        FB.log("test info message");
+        assertEqual(window._lastLogInfo, "test info message");
+    });
+
+    test("FB.logError() calls bridge", function () {
+        FB.logError("test error message");
+        assertEqual(window._lastLogError, "test error message");
+    });
+
+    test("FB.logMessages() returns bridge log", function () {
+        var logs = FB.logMessages();
+        assertType(logs, "string");
+        return logs.substring(0, 40) + "...";
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // Timezone
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.getTimeForServer() delegates to bridge (2024)", function () {
+        var t = FB.getTimeForServer("America/New_York");
+        assertEqual(t, "2024-06-15 10:30:00");
+    });
+
+    test("FB.convertServerTimeToClient() returns string", function () {
+        var t = FB.convertServerTimeToClient("2024-06-15 10:30:00", "America/New_York");
+        assertType(t, "string");
+        return t;
+    });
+
+    test("FB.convertClientTimeToServer() returns string", function () {
+        var t = FB.convertClientTimeToServer("2024-06-15 10:30:00", "America/New_York");
+        assertType(t, "string");
+        return t;
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // listMethods
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.listMethods() returns array of strings", function () {
+        var methods = FB.listMethods();
+        assertEqual(Array.isArray(methods), true);
+        // In jxbrowser mode, no methods should have "(JXBrowser only)" suffix
+        var restricted = methods.filter(function (m) { return m.indexOf("JXBrowser only") >= 0; });
+        assertEqual(restricted.length, 0, "no restricted methods in jxbrowser");
+        return methods.length + " methods";
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // FB.compat() — Global Helpers
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.compat() installs globals", function () {
+        FB.compat();
+        assertType(window.fb_query, "function");
+        assertType(window.setStatus, "function");
+        assertType(window.setProgress, "function");
+        assertType(window.getSQL, "function");
+    });
+
+    test("fb_query() global works", function () {
+        var rows = window.fb_query("SELECT 1");
+        assertEqual(Array.isArray(rows), true);
+        assertEqual(rows.length, 2);
+    });
+
+    test("setStatus() global works", function () {
+        window._lastStatus = null;
+        window.setStatus("Global status test");
+        assertEqual(window._lastStatus, "Global status test");
+    });
+
+    test("setProgress() global works", function () {
+        window._lastProgress = null;
+        window.setProgress(50);
+        assertEqual(window._lastProgress, 50);
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // Async Methods (should also work in jxbrowser via Promise.resolve)
+    // ═══════════════════════════════════════════════════════════════
+
+    // Run async tests after sync tests
+    var asyncTests = [];
+    function testAsync(name, fn) {
+        asyncTests.push({ name: name, fn: fn });
+    }
+
+    testAsync("FB.queryAsync() resolves with rows", function () {
+        return FB.queryAsync("SELECT * FROM Part").then(function (rows) {
+            assertEqual(Array.isArray(rows), true);
+            assertEqual(rows.length, 2);
+        });
+    });
+
+    testAsync("FB.getCompanyNameAsync() resolves", function () {
+        return FB.getCompanyNameAsync().then(function (name) {
+            assertEqual(name, "Test Company Inc.");
+        });
+    });
+
+    testAsync("FB.getUserIdAsync() resolves", function () {
+        return FB.getUserIdAsync().then(function (id) {
+            assertEqual(id, 42);
+        });
+    });
+
+    testAsync("FB.getPluginDataAsync() resolves", function () {
+        FB.savePluginData("asyncGroup", { key1: "val1" });
+        return FB.getPluginDataAsync("asyncGroup", "key1").then(function (val) {
+            assertEqual(val, "val1");
+        });
+    });
+
+    testAsync("FB.savePluginDataAsync() resolves", function () {
+        return FB.savePluginDataAsync("asyncGroup2", { key2: "val2" }).then(function (ok) {
+            assertEqual(ok, true);
+        });
+    });
+
+    testAsync("FB.deletePluginDataAsync() resolves", function () {
+        return FB.deletePluginDataAsync("asyncGroup").then(function (ok) {
+            assertEqual(ok, true);
+        });
+    });
+
+    testAsync("FB.hasAccessRightAsync() resolves", function () {
+        return FB.hasAccessRightAsync("ViewSO").then(function (has) {
+            assertEqual(has, true);
+        });
+    });
+
+    // ── Run async tests sequentially ──────────────────────────────
+    function runAsyncTests(idx) {
+        if (idx >= asyncTests.length) {
+            renderResults();
+            return;
+        }
+        var t = asyncTests[idx];
+        testNum++;
+        var num = testNum;
+        t.fn().then(function () {
+            results.push({ num: num, name: t.name, pass: true, detail: "OK" });
+            runAsyncTests(idx + 1);
+        }).catch(function (e) {
+            results.push({ num: num, name: t.name, pass: false, detail: e.message || String(e) });
+            runAsyncTests(idx + 1);
+        });
+    }
+
+    // ── Render ────────────────────────────────────────────────────
+    function renderResults() {
+        var tbody = document.getElementById("results");
+        var passed = 0, failed = 0;
+        results.forEach(function (r) {
+            var tr = document.createElement("tr");
+            tr.innerHTML =
+                "<td>" + r.num + "</td>" +
+                "<td>" + r.name + "</td>" +
+                '<td class="' + (r.pass ? "pass-cell" : "fail-cell") + '">' + (r.pass ? "PASS" : "FAIL") + "</td>" +
+                "<td>" + r.detail + "</td>";
+            tbody.appendChild(tr);
+            if (r.pass) passed++; else failed++;
+        });
+
+        var summary = document.getElementById("summary");
+        if (failed === 0) {
+            summary.className = "summary pass";
+            summary.textContent = "All " + passed + " tests passed";
+        } else {
+            summary.className = "summary fail";
+            summary.textContent = failed + " of " + (passed + failed) + " tests failed";
+        }
+    }
+
+    // Start async tests (sync results are already collected)
+    runAsyncTests(0);
+})();
+</script>
+
+</body>
+</html>

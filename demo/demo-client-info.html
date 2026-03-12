@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Client Info — Demo</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+.info-label { font-weight: 600; color: #495057; width: 180px; }
+.info-value { font-family: monospace; }
+.section { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.section h5 { margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #e9ecef; }
+.status-ok { color: #28a745; }
+.status-err { color: #dc3545; }
+#fb-status { font-size: 0.85em; color: #666; }
+</style>
+</head>
+<body>
+
+<div class="container py-3" style="max-width: 800px;">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <h4 class="mb-0">Client Info</h4>
+            <small class="text-muted">fb.js DemoAdapter — FB.*Async() method showcase</small>
+        </div>
+        <button class="btn btn-sm btn-outline-primary" id="btnRefresh">Refresh</button>
+    </div>
+
+    <!-- User Info Section -->
+    <div class="section">
+        <h5>User Information</h5>
+        <table class="table table-sm mb-0">
+            <tbody>
+                <tr><td class="info-label">Company Name</td><td class="info-value" id="companyName">loading...</td></tr>
+                <tr><td class="info-label">Username</td><td class="info-value" id="username">loading...</td></tr>
+                <tr><td class="info-label">Email</td><td class="info-value" id="email">loading...</td></tr>
+                <tr><td class="info-label">User ID</td><td class="info-value" id="userId">loading...</td></tr>
+                <tr><td class="info-label">User Groups</td><td class="info-value" id="userGroups">loading...</td></tr>
+                <tr><td class="info-label">Access Right: "ViewSO"</td><td class="info-value" id="accessRight">loading...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Context Section -->
+    <div class="section">
+        <h5>Context Information</h5>
+        <table class="table table-sm mb-0">
+            <tbody>
+                <tr><td class="info-label">Plugin Name</td><td class="info-value" id="pluginName">loading...</td></tr>
+                <tr><td class="info-label">Module Name</td><td class="info-value" id="moduleName">loading...</td></tr>
+                <tr><td class="info-label">Object ID</td><td class="info-value" id="objectId">loading...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Environment Section -->
+    <div class="section">
+        <h5>Environment</h5>
+        <table class="table table-sm mb-0">
+            <tbody>
+                <tr><td class="info-label">FB.version</td><td class="info-value" id="fbVersion">—</td></tr>
+                <tr><td class="info-label">FB.environment</td><td class="info-value" id="fbEnv">—</td></tr>
+                <tr><td class="info-label">FB.bridgeVersion</td><td class="info-value" id="fbBridge">—</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Timezone Section -->
+    <div class="section">
+        <h5>Timezone Functions</h5>
+        <table class="table table-sm mb-0">
+            <tbody>
+                <tr><td class="info-label">Server Time (America/New_York)</td><td class="info-value" id="serverTime">—</td></tr>
+                <tr><td class="info-label">Server→Client</td><td class="info-value" id="s2c">—</td></tr>
+                <tr><td class="info-label">Client→Server</td><td class="info-value" id="c2s">—</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Plugin Data Section -->
+    <div class="section">
+        <h5>Plugin Data Workflow</h5>
+        <div class="mb-2">
+            <div class="row g-2 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label mb-0 small">Group</label>
+                    <input type="text" class="form-control form-control-sm" id="pdGroup" value="demoGroup" style="width:140px">
+                </div>
+                <div class="col-auto">
+                    <label class="form-label mb-0 small">Key</label>
+                    <input type="text" class="form-control form-control-sm" id="pdKey" value="setting1" style="width:140px">
+                </div>
+                <div class="col-auto">
+                    <label class="form-label mb-0 small">Value</label>
+                    <input type="text" class="form-control form-control-sm" id="pdValue" value="hello world" style="width:180px">
+                </div>
+            </div>
+        </div>
+        <div class="mb-3">
+            <button class="btn btn-sm btn-success" id="btnSave">Save</button>
+            <button class="btn btn-sm btn-primary" id="btnRead">Read</button>
+            <button class="btn btn-sm btn-danger" id="btnDelete">Delete Group</button>
+        </div>
+        <div id="pdResult" class="font-monospace small text-muted" style="min-height:20px;">—</div>
+    </div>
+
+    <!-- Status bar -->
+    <div class="d-flex align-items-center mt-2">
+        <progress id="fb-progress" value="0" max="100" style="width:150px" class="me-2"></progress>
+        <span id="fb-status">Ready</span>
+    </div>
+</div>
+
+<script src="../fb.js"></script>
+<script>
+(function () {
+    var DEMO_DATA = {
+        queries: {},
+        user: { companyName: "Acme Manufacturing", username: "jsmith", email: "jsmith@acme.com", userId: 42, groups: ["1", "5"] },
+        context: { pluginName: "ILC CloudPages", moduleName: "Sales Order", objectId: 1001 }
+    };
+
+    FB.configure({
+        environment: "demo",
+        demoData: DEMO_DATA,
+        statusElement: "#fb-status",
+        progressElement: "#fb-progress"
+    });
+
+    function $(id) { return document.getElementById(id); }
+
+    function loadAll() {
+        FB.setStatus("Loading client info...");
+        FB.setProgress(10);
+
+        // Environment (sync)
+        $("fbVersion").textContent = FB.version;
+        $("fbEnv").textContent = FB.environment;
+        $("fbBridge").textContent = FB.bridgeVersion || "(n/a)";
+
+        // Timezone (sync)
+        var serverTz = "America/New_York";
+        $("serverTime").textContent = FB.getTimeForServer(serverTz);
+        $("s2c").textContent = FB.convertServerTimeToClient("2024-06-15 10:30:00", serverTz) + "  (from 2024-06-15 10:30:00 ET)";
+        $("c2s").textContent = FB.convertClientTimeToServer("2024-06-15 10:30:00", serverTz) + "  (local to ET)";
+
+        // Async user/context info
+        var promises = [
+            FB.getCompanyNameAsync().then(function (v) { $("companyName").textContent = v; }),
+            FB.getUsernameAsync().then(function (v) { $("username").textContent = v; }),
+            FB.getUserEmailAsync().then(function (v) { $("email").textContent = v; }),
+            FB.getUserIdAsync().then(function (v) { $("userId").textContent = v; }),
+            FB.getUserGroupIdsAsync().then(function (v) { $("userGroups").textContent = JSON.stringify(v); }),
+            FB.hasAccessRightAsync("ViewSO").then(function (v) {
+                $("accessRight").innerHTML = v
+                    ? '<span class="status-ok">true</span>'
+                    : '<span class="status-err">false</span>';
+            }),
+            FB.getPluginNameAsync().then(function (v) { $("pluginName").textContent = v; }),
+            FB.getModuleNameAsync().then(function (v) { $("moduleName").textContent = v; }),
+            FB.getObjectIdAsync().then(function (v) { $("objectId").textContent = v; })
+        ];
+
+        Promise.all(promises).then(function () {
+            FB.setStatus("All info loaded");
+            FB.setProgress(100);
+        }).catch(function (err) {
+            FB.setStatus("Error: " + err.message);
+        });
+    }
+
+    // ── Plugin Data buttons ────────────────────────────────────
+    $("btnSave").addEventListener("click", function () {
+        var group = $("pdGroup").value;
+        var key = $("pdKey").value;
+        var val = $("pdValue").value;
+        var data = {};
+        data[key] = val;
+        FB.savePluginDataAsync(group, data).then(function (ok) {
+            $("pdResult").textContent = "Saved: " + group + "/" + key + " = " + JSON.stringify(val) + " (result: " + ok + ")";
+            FB.setStatus("Plugin data saved");
+        });
+    });
+
+    $("btnRead").addEventListener("click", function () {
+        var group = $("pdGroup").value;
+        var key = $("pdKey").value;
+        FB.getPluginDataAsync(group, key).then(function (val) {
+            $("pdResult").textContent = "Read: " + group + "/" + key + " = " + JSON.stringify(val);
+            FB.setStatus("Plugin data read");
+        });
+    });
+
+    $("btnDelete").addEventListener("click", function () {
+        var group = $("pdGroup").value;
+        FB.deletePluginDataAsync(group).then(function (ok) {
+            $("pdResult").textContent = "Deleted group: " + group + " (result: " + ok + ")";
+            FB.setStatus("Plugin data deleted");
+        });
+    });
+
+    $("btnRefresh").addEventListener("click", loadAll);
+
+    // ── Init ───────────────────────────────────────────────────
+    loadAll();
+})();
+</script>
+
+</body>
+</html>

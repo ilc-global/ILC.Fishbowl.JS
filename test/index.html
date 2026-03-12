@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>fb.js — Test Hub</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; background: #f5f5f5; padding: 20px; color: #333; max-width: 700px; margin: 0 auto; }
+h1 { margin-bottom: 4px; font-size: 1.4em; }
+.subtitle { color: #666; margin-bottom: 20px; font-size: 0.9em; }
+.info-box { background: #fff; border-radius: 6px; padding: 16px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.info-box h2 { font-size: 1em; margin-bottom: 8px; color: #495057; }
+.info-box table { width: 100%; }
+.info-box td { padding: 4px 8px; font-size: 0.85em; }
+.info-box td:first-child { font-weight: bold; width: 140px; color: #666; }
+.links { list-style: none; }
+.links li { margin-bottom: 12px; }
+.links a { display: block; background: #fff; padding: 16px; border-radius: 6px; text-decoration: none; color: #333; box-shadow: 0 1px 3px rgba(0,0,0,0.1); transition: box-shadow 0.2s, transform 0.1s; }
+.links a:hover { box-shadow: 0 3px 8px rgba(0,0,0,0.15); transform: translateY(-1px); }
+.links .title { font-weight: bold; font-size: 1em; color: #007bff; }
+.links .desc { font-size: 0.85em; color: #666; margin-top: 4px; }
+.links .tag { display: inline-block; font-size: 0.75em; padding: 2px 8px; border-radius: 10px; margin-top: 6px; }
+.tag-zero { background: #d4edda; color: #155724; }
+.tag-server { background: #fff3cd; color: #856404; }
+.tag-cdn { background: #d1ecf1; color: #0c5460; }
+hr { border: none; border-top: 1px solid #ddd; margin: 20px 0; }
+</style>
+</head>
+<body>
+
+<h1>fb.js — Test Hub</h1>
+<p class="subtitle">Developer test pages for verifying fb.js adapters</p>
+
+<div class="info-box">
+    <h2>Environment Info</h2>
+    <table>
+        <tr><td>FB.version</td><td id="fb-version">—</td></tr>
+        <tr><td>FB.environment</td><td id="fb-env">—</td></tr>
+        <tr><td>User Agent</td><td id="ua">—</td></tr>
+    </table>
+</div>
+
+<ul class="links">
+    <li>
+        <a href="test-demo.html">
+            <div class="title">DemoAdapter Test</div>
+            <div class="desc">Exercises every async method using inline demo data. No server required.</div>
+            <span class="tag tag-zero">Zero dependencies</span>
+        </a>
+    </li>
+    <li>
+        <a href="test-compat.html">
+            <div class="title">Compat / JXBrowser Test</div>
+            <div class="desc">Fake fb_client mock + FB.compat() globals. Verifies all sync methods.</div>
+            <span class="tag tag-zero">Zero dependencies</span>
+        </a>
+    </li>
+    <li>
+        <a href="test-web.html">
+            <div class="title">WebAdapter Test</div>
+            <div class="desc">Tests WebAdapter against mock-server.js. Start server first: <code>node mock-server.js</code></div>
+            <span class="tag tag-server">Requires mock server</span>
+        </a>
+    </li>
+</ul>
+
+<hr>
+
+<ul class="links">
+    <li>
+        <a href="../demo/index.html">
+            <div class="title">Demo Pages</div>
+            <div class="desc">Showcase CloudPages running in demo mode with Bootstrap styling.</div>
+            <span class="tag tag-cdn">Bootstrap CDN</span>
+        </a>
+    </li>
+</ul>
+
+<script src="../fb.js"></script>
+<script>
+document.getElementById('fb-version').textContent = FB.version;
+document.getElementById('fb-env').textContent = FB.environment;
+document.getElementById('ua').textContent = navigator.userAgent.substring(0, 80) + '...';
+</script>
+
+</body>
+</html>

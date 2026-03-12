@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sales by Territory — Demo</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+.table-sortable th { cursor: pointer; user-select: none; }
+.table-sortable th:hover { background-color: #e9ecef; }
+.table-sortable th .sort-icon { float: right; color: #aaa; }
+.table-sortable th .sort-icon.active { color: #333; }
+.summary-row { font-weight: bold; background-color: #f8f9fa; }
+#fb-status { font-size: 0.85em; color: #666; }
+.filter-bar { background: #f8f9fa; padding: 12px 16px; border-radius: 6px; margin-bottom: 16px; }
+</style>
+</head>
+<body>
+
+<div class="container-fluid py-3">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <div>
+            <h4 class="mb-0">Sales by Territory</h4>
+            <small class="text-muted">fb.js DemoAdapter — Inline demo data</small>
+        </div>
+        <div>
+            <button class="btn btn-sm btn-outline-primary" id="btnExport">Export CSV</button>
+            <button class="btn btn-sm btn-outline-secondary" id="btnRefresh">Refresh</button>
+        </div>
+    </div>
+
+    <!-- Filter bar -->
+    <div class="filter-bar">
+        <div class="row g-2 align-items-end">
+            <div class="col-auto">
+                <label class="form-label mb-0 small">Date From</label>
+                <input type="date" class="form-control form-control-sm" id="dateFrom" value="2024-01-01">
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0 small">Date To</label>
+                <input type="date" class="form-control form-control-sm" id="dateTo" value="2024-12-31">
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0 small">State</label>
+                <select class="form-select form-select-sm" id="filterState"><option value="">All</option></select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0 small">Sales Rep</label>
+                <select class="form-select form-select-sm" id="filterRep"><option value="">All</option></select>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-sm btn-primary" id="btnFilter">Apply</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Data table -->
+    <div class="table-responsive">
+        <table class="table table-sm table-striped table-hover table-sortable" id="dataTable">
+            <thead>
+                <tr>
+                    <th data-col="State">State <span class="sort-icon">&#x25B2;&#x25BC;</span></th>
+                    <th data-col="Customer">Customer <span class="sort-icon">&#x25B2;&#x25BC;</span></th>
+                    <th data-col="ProductNumber">Product # <span class="sort-icon">&#x25B2;&#x25BC;</span></th>
+                    <th data-col="ProductDescription">Description <span class="sort-icon">&#x25B2;&#x25BC;</span></th>
+                    <th data-col="UnitsSold" class="text-end">Units Sold <span class="sort-icon">&#x25B2;&#x25BC;</span></th>
+                    <th data-col="Revenue" class="text-end">Revenue <span class="sort-icon">&#x25B2;&#x25BC;</span></th>
+                    <th data-col="COGS" class="text-end">COGS <span class="sort-icon">&#x25B2;&#x25BC;</span></th>
+                    <th data-col="Margin" class="text-end">Margin <span class="sort-icon">&#x25B2;&#x25BC;</span></th>
+                    <th data-col="SalesRep">Sales Rep <span class="sort-icon">&#x25B2;&#x25BC;</span></th>
+                    <th data-col="DaysSinceLastOrder" class="text-end">Days Since <span class="sort-icon">&#x25B2;&#x25BC;</span></th>
+                </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+            <tfoot id="tableFoot"></tfoot>
+        </table>
+    </div>
+
+    <!-- Status bar -->
+    <div class="d-flex align-items-center mt-2">
+        <progress id="fb-progress" value="0" max="100" style="width:150px" class="me-2"></progress>
+        <span id="fb-status">Ready</span>
+    </div>
+</div>
+
+<!-- SQL template (demonstrates <script type="text/plain"> pattern) -->
+<script type="text/plain" id="salesQuery">
+SELECT State, Customer, ProductNumber, ProductDescription,
+       UnitsSold, Revenue, COGS, Margin, SalesRep,
+       LastOrderDate, DaysSinceLastOrder
+FROM SalesByTerritory
+WHERE LastOrderDate >= :dateFrom AND LastOrderDate <= :dateTo
+</script>
+
+<script src="../fb.js"></script>
+<script>
+(function () {
+    // ── Demo data: ~20 rows across 5 states ─────────────────────
+    var DEMO_DATA = {
+        queries: {
+            "salesQuery": [
+                { State: "CA", Customer: "Acme Corp", ProductNumber: "P100", ProductDescription: "Widget A", UnitsSold: 50, Revenue: 5000, COGS: 3000, Margin: 2000, SalesRep: "Alice", LastOrderDate: "2024-06-01", DaysSinceLastOrder: 30 },
+                { State: "CA", Customer: "Acme Corp", ProductNumber: "P200", ProductDescription: "Widget B", UnitsSold: 20, Revenue: 2000, COGS: 1200, Margin: 800, SalesRep: "Alice", LastOrderDate: "2024-05-20", DaysSinceLastOrder: 42 },
+                { State: "CA", Customer: "Beta LLC", ProductNumber: "P200", ProductDescription: "Widget B", UnitsSold: 30, Revenue: 3000, COGS: 1800, Margin: 1200, SalesRep: "Alice", LastOrderDate: "2024-05-15", DaysSinceLastOrder: 47 },
+                { State: "CA", Customer: "Beta LLC", ProductNumber: "P300", ProductDescription: "Gadget X", UnitsSold: 12, Revenue: 2400, COGS: 1500, Margin: 900, SalesRep: "Alice", LastOrderDate: "2024-06-05", DaysSinceLastOrder: 26 },
+                { State: "TX", Customer: "Gamma Inc", ProductNumber: "P100", ProductDescription: "Widget A", UnitsSold: 25, Revenue: 2500, COGS: 1500, Margin: 1000, SalesRep: "Bob", LastOrderDate: "2024-06-10", DaysSinceLastOrder: 21 },
+                { State: "TX", Customer: "Gamma Inc", ProductNumber: "P400", ProductDescription: "Doohickey Z", UnitsSold: 8, Revenue: 4000, COGS: 2800, Margin: 1200, SalesRep: "Bob", LastOrderDate: "2024-06-12", DaysSinceLastOrder: 19 },
+                { State: "TX", Customer: "Epsilon Ltd", ProductNumber: "P300", ProductDescription: "Gadget X", UnitsSold: 15, Revenue: 3000, COGS: 2000, Margin: 1000, SalesRep: "Bob", LastOrderDate: "2024-05-20", DaysSinceLastOrder: 42 },
+                { State: "TX", Customer: "Epsilon Ltd", ProductNumber: "P100", ProductDescription: "Widget A", UnitsSold: 18, Revenue: 1800, COGS: 1080, Margin: 720, SalesRep: "Bob", LastOrderDate: "2024-06-18", DaysSinceLastOrder: 13 },
+                { State: "NY", Customer: "Delta Co", ProductNumber: "P300", ProductDescription: "Gadget X", UnitsSold: 40, Revenue: 8000, COGS: 5000, Margin: 3000, SalesRep: "Carol", LastOrderDate: "2024-06-20", DaysSinceLastOrder: 11 },
+                { State: "NY", Customer: "Delta Co", ProductNumber: "P200", ProductDescription: "Widget B", UnitsSold: 22, Revenue: 2200, COGS: 1320, Margin: 880, SalesRep: "Carol", LastOrderDate: "2024-06-15", DaysSinceLastOrder: 16 },
+                { State: "NY", Customer: "Zeta Group", ProductNumber: "P100", ProductDescription: "Widget A", UnitsSold: 20, Revenue: 2000, COGS: 1200, Margin: 800, SalesRep: "Carol", LastOrderDate: "2024-06-05", DaysSinceLastOrder: 26 },
+                { State: "NY", Customer: "Zeta Group", ProductNumber: "P400", ProductDescription: "Doohickey Z", UnitsSold: 5, Revenue: 2500, COGS: 1750, Margin: 750, SalesRep: "Carol", LastOrderDate: "2024-06-22", DaysSinceLastOrder: 9 },
+                { State: "FL", Customer: "Eta Systems", ProductNumber: "P200", ProductDescription: "Widget B", UnitsSold: 35, Revenue: 3500, COGS: 2100, Margin: 1400, SalesRep: "Dave", LastOrderDate: "2024-06-12", DaysSinceLastOrder: 19 },
+                { State: "FL", Customer: "Eta Systems", ProductNumber: "P100", ProductDescription: "Widget A", UnitsSold: 28, Revenue: 2800, COGS: 1680, Margin: 1120, SalesRep: "Dave", LastOrderDate: "2024-06-08", DaysSinceLastOrder: 23 },
+                { State: "FL", Customer: "Iota Partners", ProductNumber: "P300", ProductDescription: "Gadget X", UnitsSold: 10, Revenue: 2000, COGS: 1250, Margin: 750, SalesRep: "Dave", LastOrderDate: "2024-05-28", DaysSinceLastOrder: 34 },
+                { State: "FL", Customer: "Iota Partners", ProductNumber: "P400", ProductDescription: "Doohickey Z", UnitsSold: 6, Revenue: 3000, COGS: 2100, Margin: 900, SalesRep: "Dave", LastOrderDate: "2024-06-01", DaysSinceLastOrder: 30 },
+                { State: "WA", Customer: "Theta Tech", ProductNumber: "P400", ProductDescription: "Doohickey Z", UnitsSold: 10, Revenue: 5000, COGS: 3500, Margin: 1500, SalesRep: "Eve", LastOrderDate: "2024-06-18", DaysSinceLastOrder: 13 },
+                { State: "WA", Customer: "Theta Tech", ProductNumber: "P100", ProductDescription: "Widget A", UnitsSold: 15, Revenue: 1500, COGS: 900, Margin: 600, SalesRep: "Eve", LastOrderDate: "2024-06-10", DaysSinceLastOrder: 21 },
+                { State: "WA", Customer: "Kappa Solutions", ProductNumber: "P200", ProductDescription: "Widget B", UnitsSold: 18, Revenue: 1800, COGS: 1080, Margin: 720, SalesRep: "Eve", LastOrderDate: "2024-06-14", DaysSinceLastOrder: 17 },
+                { State: "WA", Customer: "Kappa Solutions", ProductNumber: "P300", ProductDescription: "Gadget X", UnitsSold: 7, Revenue: 1400, COGS: 875, Margin: 525, SalesRep: "Eve", LastOrderDate: "2024-05-30", DaysSinceLastOrder: 32 }
+            ]
+        },
+        user: { companyName: "Acme Manufacturing", username: "jsmith", email: "jsmith@acme.com", userId: 42, groups: ["1", "5"] },
+        context: { pluginName: "ILC CloudPages", moduleName: "Sales Order", objectId: 1001 }
+    };
+
+    FB.configure({
+        environment: "demo",
+        demoData: DEMO_DATA,
+        statusElement: "#fb-status",
+        progressElement: "#fb-progress"
+    });
+
+    var allRows = [];
+    var filteredRows = [];
+    var sortCol = null;
+    var sortAsc = true;
+
+    // ── Load data ──────────────────────────────────────────────
+    function loadData() {
+        FB.setStatus("Loading data...");
+        FB.setProgress(20);
+
+        var sql = document.getElementById("salesQuery").textContent.trim();
+        FB.queryAsync(sql).then(function (rows) {
+            allRows = rows;
+            FB.setProgress(60);
+
+            populateFilters(rows);
+            applyFilters();
+            FB.setStatus(rows.length + " rows loaded");
+            FB.setProgress(100);
+        }).catch(function (err) {
+            FB.setStatus("Error: " + err.message);
+        });
+    }
+
+    // ── Populate filter dropdowns ──────────────────────────────
+    function populateFilters(rows) {
+        var states = {}, reps = {};
+        rows.forEach(function (r) {
+            states[r.State] = true;
+            reps[r.SalesRep] = true;
+        });
+
+        var stateSelect = document.getElementById("filterState");
+        stateSelect.innerHTML = '<option value="">All</option>';
+        Object.keys(states).sort().forEach(function (s) {
+            stateSelect.innerHTML += '<option value="' + s + '">' + s + '</option>';
+        });
+
+        var repSelect = document.getElementById("filterRep");
+        repSelect.innerHTML = '<option value="">All</option>';
+        Object.keys(reps).sort().forEach(function (r) {
+            repSelect.innerHTML += '<option value="' + r + '">' + r + '</option>';
+        });
+    }
+
+    // ── Apply filters ──────────────────────────────────────────
+    function applyFilters() {
+        var state = document.getElementById("filterState").value;
+        var rep = document.getElementById("filterRep").value;
+
+        filteredRows = allRows.filter(function (r) {
+            if (state && r.State !== state) return false;
+            if (rep && r.SalesRep !== rep) return false;
+            return true;
+        });
+
+        if (sortCol) sortBy(sortCol, false);
+        else renderTable(filteredRows);
+    }
+
+    // ── Sort ───────────────────────────────────────────────────
+    function sortBy(col, toggle) {
+        if (toggle) {
+            if (sortCol === col) sortAsc = !sortAsc;
+            else { sortCol = col; sortAsc = true; }
+        }
+        sortCol = col;
+
+        filteredRows.sort(function (a, b) {
+            var va = a[col], vb = b[col];
+            if (typeof va === "number" && typeof vb === "number") return sortAsc ? va - vb : vb - va;
+            va = String(va || ""); vb = String(vb || "");
+            return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+        });
+
+        renderTable(filteredRows);
+    }
+
+    // ── Render table ───────────────────────────────────────────
+    function renderTable(rows) {
+        var tbody = document.getElementById("tableBody");
+        var html = "";
+        var totals = { UnitsSold: 0, Revenue: 0, COGS: 0, Margin: 0 };
+
+        rows.forEach(function (r) {
+            totals.UnitsSold += r.UnitsSold;
+            totals.Revenue += r.Revenue;
+            totals.COGS += r.COGS;
+            totals.Margin += r.Margin;
+
+            html += "<tr>" +
+                "<td>" + r.State + "</td>" +
+                "<td>" + r.Customer + "</td>" +
+                "<td>" + r.ProductNumber + "</td>" +
+                "<td>" + r.ProductDescription + "</td>" +
+                '<td class="text-end">' + r.UnitsSold.toLocaleString() + "</td>" +
+                '<td class="text-end">$' + r.Revenue.toLocaleString() + "</td>" +
+                '<td class="text-end">$' + r.COGS.toLocaleString() + "</td>" +
+                '<td class="text-end">$' + r.Margin.toLocaleString() + "</td>" +
+                "<td>" + r.SalesRep + "</td>" +
+                '<td class="text-end">' + r.DaysSinceLastOrder + "</td>" +
+                "</tr>";
+        });
+        tbody.innerHTML = html;
+
+        var tfoot = document.getElementById("tableFoot");
+        tfoot.innerHTML = '<tr class="summary-row">' +
+            '<td colspan="4"><strong>Totals (' + rows.length + ' rows)</strong></td>' +
+            '<td class="text-end"><strong>' + totals.UnitsSold.toLocaleString() + '</strong></td>' +
+            '<td class="text-end"><strong>$' + totals.Revenue.toLocaleString() + '</strong></td>' +
+            '<td class="text-end"><strong>$' + totals.COGS.toLocaleString() + '</strong></td>' +
+            '<td class="text-end"><strong>$' + totals.Margin.toLocaleString() + '</strong></td>' +
+            '<td colspan="2"></td>' +
+            '</tr>';
+    }
+
+    // ── CSV Export ──────────────────────────────────────────────
+    function exportCSV() {
+        if (filteredRows.length === 0) return;
+        var cols = ["State", "Customer", "ProductNumber", "ProductDescription", "UnitsSold", "Revenue", "COGS", "Margin", "SalesRep", "LastOrderDate", "DaysSinceLastOrder"];
+        var csv = cols.join(",") + "\n";
+        filteredRows.forEach(function (r) {
+            csv += cols.map(function (c) {
+                var v = String(r[c] || "");
+                return v.indexOf(",") >= 0 ? '"' + v + '"' : v;
+            }).join(",") + "\n";
+        });
+
+        FB.setStatus("Exporting CSV...");
+        FB.saveFile("Sales Report", "csv", "CSV Files", btoa(csv), "sales-report.csv", false);
+        FB.setStatus("CSV exported (" + filteredRows.length + " rows)");
+    }
+
+    // ── Event listeners ────────────────────────────────────────
+    document.getElementById("btnFilter").addEventListener("click", applyFilters);
+    document.getElementById("btnRefresh").addEventListener("click", loadData);
+    document.getElementById("btnExport").addEventListener("click", exportCSV);
+
+    document.querySelectorAll("#dataTable thead th[data-col]").forEach(function (th) {
+        th.addEventListener("click", function () {
+            sortBy(th.getAttribute("data-col"), true);
+        });
+    });
+
+    // ── Init ───────────────────────────────────────────────────
+    loadData();
+})();
+</script>
+
+</body>
+</html>

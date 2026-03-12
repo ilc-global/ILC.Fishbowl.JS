@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Query Explorer — Demo</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+#sqlInput { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 0.9em; min-height: 100px; }
+#jsonOutput { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 0.8em; background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 6px; max-height: 300px; overflow: auto; white-space: pre-wrap; }
+.result-table { margin-top: 12px; }
+#fb-status { font-size: 0.85em; color: #666; }
+.query-option { cursor: pointer; }
+.query-option:hover { background-color: #f8f9fa; }
+</style>
+</head>
+<body>
+
+<div class="container py-3" style="max-width: 960px;">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <h4 class="mb-0">Query Explorer</h4>
+            <small class="text-muted">fb.js DemoAdapter — Interactive SQL in demo mode</small>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- Left: SQL editor -->
+        <div class="col-md-8">
+            <div class="mb-2">
+                <label class="form-label small fw-bold mb-1">SQL Query</label>
+                <textarea class="form-control" id="sqlInput" placeholder="Enter a SQL query or pick from examples...">SalesByTerritory</textarea>
+            </div>
+            <div class="d-flex gap-2 mb-3">
+                <button class="btn btn-primary btn-sm" id="btnExecute">Execute</button>
+                <button class="btn btn-outline-secondary btn-sm" id="btnClear">Clear</button>
+                <span class="ms-auto small text-muted align-self-center" id="queryInfo">—</span>
+            </div>
+        </div>
+
+        <!-- Right: Example queries -->
+        <div class="col-md-4">
+            <label class="form-label small fw-bold mb-1">Example Queries</label>
+            <div class="list-group list-group-flush" id="exampleList"></div>
+        </div>
+    </div>
+
+    <!-- Results: JSON view -->
+    <ul class="nav nav-tabs mb-0" id="resultTabs">
+        <li class="nav-item">
+            <button class="nav-link active" data-tab="table">Table</button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" data-tab="json">JSON</button>
+        </li>
+    </ul>
+
+    <div id="tabTable" class="border border-top-0 rounded-bottom p-2">
+        <div class="table-responsive result-table">
+            <table class="table table-sm table-striped mb-0" id="resultTable">
+                <thead id="resultHead"></thead>
+                <tbody id="resultBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="tabJson" class="border border-top-0 rounded-bottom p-0" style="display:none;">
+        <pre id="jsonOutput">// Results will appear here</pre>
+    </div>
+
+    <!-- Status bar -->
+    <div class="d-flex align-items-center mt-3">
+        <progress id="fb-progress" value="0" max="100" style="width:150px" class="me-2"></progress>
+        <span id="fb-status">Ready</span>
+    </div>
+</div>
+
+<script src="../fb.js"></script>
+<script>
+(function () {
+    // ── Demo data with multiple query keys ──────────────────────
+    var DEMO_DATA = {
+        queries: {
+            "SalesByTerritory": [
+                { State: "CA", Customer: "Acme Corp", ProductNumber: "P100", ProductDescription: "Widget A", UnitsSold: 50, Revenue: 5000, COGS: 3000, Margin: 2000, SalesRep: "Alice", LastOrderDate: "2024-06-01", DaysSinceLastOrder: 30 },
+                { State: "CA", Customer: "Beta LLC", ProductNumber: "P200", ProductDescription: "Widget B", UnitsSold: 30, Revenue: 3000, COGS: 1800, Margin: 1200, SalesRep: "Alice", LastOrderDate: "2024-05-15", DaysSinceLastOrder: 47 },
+                { State: "TX", Customer: "Gamma Inc", ProductNumber: "P100", ProductDescription: "Widget A", UnitsSold: 25, Revenue: 2500, COGS: 1500, Margin: 1000, SalesRep: "Bob", LastOrderDate: "2024-06-10", DaysSinceLastOrder: 21 },
+                { State: "TX", Customer: "Epsilon Ltd", ProductNumber: "P300", ProductDescription: "Gadget X", UnitsSold: 15, Revenue: 3000, COGS: 2000, Margin: 1000, SalesRep: "Bob", LastOrderDate: "2024-05-20", DaysSinceLastOrder: 42 },
+                { State: "NY", Customer: "Delta Co", ProductNumber: "P300", ProductDescription: "Gadget X", UnitsSold: 40, Revenue: 8000, COGS: 5000, Margin: 3000, SalesRep: "Carol", LastOrderDate: "2024-06-20", DaysSinceLastOrder: 11 },
+                { State: "FL", Customer: "Eta Systems", ProductNumber: "P200", ProductDescription: "Widget B", UnitsSold: 35, Revenue: 3500, COGS: 2100, Margin: 1400, SalesRep: "Dave", LastOrderDate: "2024-06-12", DaysSinceLastOrder: 19 },
+                { State: "WA", Customer: "Theta Tech", ProductNumber: "P400", ProductDescription: "Doohickey Z", UnitsSold: 10, Revenue: 5000, COGS: 3500, Margin: 1500, SalesRep: "Eve", LastOrderDate: "2024-06-18", DaysSinceLastOrder: 13 }
+            ],
+            "PartList": [
+                { PartNum: "P100", Description: "Widget A", Price: 100.00, UOM: "ea", Active: true },
+                { PartNum: "P200", Description: "Widget B", Price: 100.00, UOM: "ea", Active: true },
+                { PartNum: "P300", Description: "Gadget X", Price: 200.00, UOM: "ea", Active: true },
+                { PartNum: "P400", Description: "Doohickey Z", Price: 500.00, UOM: "ea", Active: true },
+                { PartNum: "P500", Description: "Thingamajig Y", Price: 75.00, UOM: "pk", Active: false }
+            ],
+            "CustomerList": [
+                { ID: 1, Name: "Acme Corp", State: "CA", CreditLimit: 50000, Balance: 12500 },
+                { ID: 2, Name: "Beta LLC", State: "CA", CreditLimit: 30000, Balance: 8200 },
+                { ID: 3, Name: "Gamma Inc", State: "TX", CreditLimit: 45000, Balance: 15000 },
+                { ID: 4, Name: "Delta Co", State: "NY", CreditLimit: 60000, Balance: 22000 },
+                { ID: 5, Name: "Epsilon Ltd", State: "TX", CreditLimit: 25000, Balance: 3500 },
+                { ID: 6, Name: "Eta Systems", State: "FL", CreditLimit: 40000, Balance: 18000 },
+                { ID: 7, Name: "Theta Tech", State: "WA", CreditLimit: 55000, Balance: 9000 }
+            ],
+            "SELECT 1 AS test": [
+                { test: 1 }
+            ]
+        },
+        user: { companyName: "Acme Manufacturing", username: "jsmith", email: "jsmith@acme.com", userId: 42, groups: ["1", "5"] },
+        context: { pluginName: "ILC CloudPages", moduleName: "Sales Order", objectId: 1001 }
+    };
+
+    FB.configure({
+        environment: "demo",
+        demoData: DEMO_DATA,
+        statusElement: "#fb-status",
+        progressElement: "#fb-progress"
+    });
+
+    // ── Example queries list ────────────────────────────────────
+    var examples = [
+        { label: "Sales by Territory", sql: "SalesByTerritory" },
+        { label: "Part List", sql: "PartList" },
+        { label: "Customer List", sql: "CustomerList" },
+        { label: "SELECT 1 AS test", sql: "SELECT 1 AS test" },
+        { label: "Non-existent (empty)", sql: "SELECT * FROM DoesNotExist" }
+    ];
+
+    var exampleList = document.getElementById("exampleList");
+    examples.forEach(function (ex) {
+        var a = document.createElement("a");
+        a.className = "list-group-item list-group-item-action py-1 px-2 small query-option";
+        a.textContent = ex.label;
+        a.href = "#";
+        a.addEventListener("click", function (e) {
+            e.preventDefault();
+            document.getElementById("sqlInput").value = ex.sql;
+            executeQuery();
+        });
+        exampleList.appendChild(a);
+    });
+
+    // ── Tab switching ──────────────────────────────────────────
+    document.querySelectorAll("#resultTabs button").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+            document.querySelectorAll("#resultTabs button").forEach(function (b) { b.classList.remove("active"); });
+            btn.classList.add("active");
+            var tab = btn.getAttribute("data-tab");
+            document.getElementById("tabTable").style.display = tab === "table" ? "" : "none";
+            document.getElementById("tabJson").style.display = tab === "json" ? "" : "none";
+        });
+    });
+
+    // ── Execute query ──────────────────────────────────────────
+    function executeQuery() {
+        var sql = document.getElementById("sqlInput").value.trim();
+        if (!sql) return;
+
+        FB.setStatus("Executing query...");
+        FB.setProgress(30);
+
+        var t0 = performance.now();
+        FB.queryAsync(sql).then(function (rows) {
+            var elapsed = Math.round(performance.now() - t0);
+            FB.setProgress(100);
+            FB.setStatus("Query returned " + rows.length + " rows in " + elapsed + "ms");
+            document.getElementById("queryInfo").textContent = rows.length + " rows, " + elapsed + "ms";
+
+            renderTableResult(rows);
+            renderJsonResult(rows);
+        }).catch(function (err) {
+            FB.setStatus("Error: " + err.message);
+            document.getElementById("queryInfo").textContent = "Error";
+            document.getElementById("jsonOutput").textContent = "// Error: " + err.message;
+            document.getElementById("resultHead").innerHTML = "";
+            document.getElementById("resultBody").innerHTML = '<tr><td class="text-danger">' + err.message + '</td></tr>';
+        });
+    }
+
+    function renderTableResult(rows) {
+        var thead = document.getElementById("resultHead");
+        var tbody = document.getElementById("resultBody");
+
+        if (rows.length === 0) {
+            thead.innerHTML = "";
+            tbody.innerHTML = '<tr><td class="text-muted">No results</td></tr>';
+            return;
+        }
+
+        var cols = Object.keys(rows[0]);
+        thead.innerHTML = "<tr>" + cols.map(function (c) { return "<th>" + escapeHtml(c) + "</th>"; }).join("") + "</tr>";
+        tbody.innerHTML = rows.map(function (row) {
+            return "<tr>" + cols.map(function (c) {
+                return "<td>" + escapeHtml(String(row[c] !== null && row[c] !== undefined ? row[c] : "")) + "</td>";
+            }).join("") + "</tr>";
+        }).join("");
+    }
+
+    function renderJsonResult(rows) {
+        document.getElementById("jsonOutput").textContent = JSON.stringify(rows, null, 2);
+    }
+
+    function escapeHtml(str) {
+        return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    // ── Events ─────────────────────────────────────────────────
+    document.getElementById("btnExecute").addEventListener("click", executeQuery);
+    document.getElementById("btnClear").addEventListener("click", function () {
+        document.getElementById("sqlInput").value = "";
+        document.getElementById("resultHead").innerHTML = "";
+        document.getElementById("resultBody").innerHTML = "";
+        document.getElementById("jsonOutput").textContent = "// Results will appear here";
+        document.getElementById("queryInfo").textContent = "—";
+    });
+
+    // Ctrl+Enter to execute
+    document.getElementById("sqlInput").addEventListener("keydown", function (e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+            e.preventDefault();
+            executeQuery();
+        }
+    });
+
+    // Run initial query
+    executeQuery();
+})();
+</script>
+
+</body>
+</html>

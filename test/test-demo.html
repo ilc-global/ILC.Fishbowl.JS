@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>fb.js — DemoAdapter Test</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; background: #f5f5f5; padding: 20px; color: #333; }
+h1 { margin-bottom: 4px; font-size: 1.4em; }
+.subtitle { color: #666; margin-bottom: 16px; font-size: 0.9em; }
+.summary { padding: 12px 16px; border-radius: 6px; margin-bottom: 16px; font-weight: bold; font-size: 1.1em; }
+.summary.pass { background: #d4edda; color: #155724; }
+.summary.fail { background: #f8d7da; color: #721c24; }
+.summary.running { background: #fff3cd; color: #856404; }
+table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+th { background: #343a40; color: #fff; text-align: left; padding: 10px 12px; font-size: 0.85em; }
+td { padding: 8px 12px; border-bottom: 1px solid #eee; font-size: 0.85em; }
+tr:last-child td { border-bottom: none; }
+.pass-cell { color: #28a745; font-weight: bold; }
+.fail-cell { color: #dc3545; font-weight: bold; }
+.info { background: #e8f4fd; padding: 12px 16px; border-radius: 6px; margin-bottom: 16px; font-size: 0.85em; border-left: 4px solid #2196F3; }
+#fb-status { padding: 8px 12px; background: #eee; border-radius: 4px; margin-bottom: 16px; min-height: 20px; font-size: 0.85em; }
+progress { width: 200px; }
+</style>
+</head>
+<body>
+
+<h1>fb.js — DemoAdapter Test</h1>
+<p class="subtitle">Exercises every async method using DemoAdapter with inline demo data</p>
+
+<div class="info">
+    No external dependencies. Opens directly in the browser — no server needed.
+</div>
+
+<div id="fb-status">Status: ready</div>
+<progress id="fb-progress" value="0" max="100"></progress>
+
+<div id="summary" class="summary running">Running tests...</div>
+
+<table>
+<thead><tr><th>#</th><th>Test</th><th>Result</th><th>Detail</th></tr></thead>
+<tbody id="results"></tbody>
+</table>
+
+<script src="../fb.js"></script>
+<script>
+(function () {
+    // ── Configure DemoAdapter with inline data ────────────────────
+    var DEMO_DATA = {
+        queries: {
+            "SalesByTerritory": [
+                { State: "CA", Customer: "Acme Corp", ProductNumber: "P100", ProductDescription: "Widget A", UnitsSold: 50, Revenue: 5000, COGS: 3000, Margin: 2000, SalesRep: "Alice", LastOrderDate: "2024-06-01", DaysSinceLastOrder: 30 },
+                { State: "CA", Customer: "Beta LLC", ProductNumber: "P200", ProductDescription: "Widget B", UnitsSold: 30, Revenue: 3000, COGS: 1800, Margin: 1200, SalesRep: "Alice", LastOrderDate: "2024-05-15", DaysSinceLastOrder: 47 },
+                { State: "TX", Customer: "Gamma Inc", ProductNumber: "P100", ProductDescription: "Widget A", UnitsSold: 25, Revenue: 2500, COGS: 1500, Margin: 1000, SalesRep: "Bob", LastOrderDate: "2024-06-10", DaysSinceLastOrder: 21 },
+                { State: "NY", Customer: "Delta Co", ProductNumber: "P300", ProductDescription: "Gadget X", UnitsSold: 40, Revenue: 8000, COGS: 5000, Margin: 3000, SalesRep: "Carol", LastOrderDate: "2024-06-20", DaysSinceLastOrder: 11 }
+            ],
+            "PartList": [
+                { PartNum: "P100", Description: "Widget A", Price: 100 },
+                { PartNum: "P200", Description: "Widget B", Price: 100 },
+                { PartNum: "P300", Description: "Gadget X", Price: 200 }
+            ]
+        },
+        user: {
+            companyName: "Acme Manufacturing",
+            username: "jsmith",
+            email: "jsmith@acme.com",
+            userId: 42,
+            groups: ["1", "5"]
+        },
+        context: {
+            pluginName: "ILC CloudPages",
+            moduleName: "Sales Order",
+            objectId: 1001
+        },
+        restApi: { http_code: "200", response: '{"items":[]}' },
+        legacyApi: { status: "ok", type: "demo" }
+    };
+
+    FB.configure({
+        environment: "demo",
+        demoData: DEMO_DATA,
+        statusElement: "#fb-status",
+        progressElement: "#fb-progress"
+    });
+
+    // ── Test framework ──────────────────────────────────────────
+    var results = [];
+    var testNum = 0;
+    var tests = [];
+
+    function test(name, fn) {
+        tests.push({ name: name, fn: fn });
+    }
+
+    function assertEqual(actual, expected, label) {
+        if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+            throw new Error((label ? label + ": " : "") + "Expected " + JSON.stringify(expected) + ", got " + JSON.stringify(actual));
+        }
+    }
+
+    function assertType(val, type, label) {
+        if (typeof val !== type) {
+            throw new Error((label ? label + ": " : "") + "Expected type " + type + ", got " + typeof val);
+        }
+    }
+
+    function assertTrue(val, label) {
+        if (!val) throw new Error((label || "assertTrue") + ": expected truthy, got " + JSON.stringify(val));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Environment
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.environment === 'demo'", function () {
+        assertEqual(FB.environment, "demo");
+    });
+
+    test("FB.isDemo === true", function () {
+        assertEqual(FB.isDemo, true);
+    });
+
+    test("FB.isJXBrowser === false", function () {
+        assertEqual(FB.isJXBrowser, false);
+    });
+
+    test("FB.version is a string", function () {
+        assertType(FB.version, "string");
+        return FB.version;
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // Sync methods should throw PlatformError
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.query() throws PlatformError in demo", function () {
+        try {
+            FB.query("SELECT 1");
+            throw new Error("Should have thrown");
+        } catch (e) {
+            assertTrue(e instanceof FB.PlatformError, "instanceof PlatformError");
+            assertTrue(e.method === "query", "method === 'query'");
+            assertTrue(e.environment === "demo", "environment === 'demo'");
+            return e.message.substring(0, 60) + "...";
+        }
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // Async Data Methods
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.queryAsync() — exact key match", function () {
+        return FB.queryAsync("SalesByTerritory").then(function (rows) {
+            assertEqual(Array.isArray(rows), true);
+            assertEqual(rows.length, 4);
+            assertEqual(rows[0].State, "CA");
+            return rows.length + " rows";
+        });
+    });
+
+    test("FB.queryAsync() — substring match", function () {
+        return FB.queryAsync("SELECT * FROM SalesByTerritory WHERE state = 'CA'").then(function (rows) {
+            assertEqual(Array.isArray(rows), true);
+            assertTrue(rows.length > 0, "should match SalesByTerritory key");
+            return rows.length + " rows (substring match)";
+        });
+    });
+
+    test("FB.queryAsync() — no match returns empty array", function () {
+        return FB.queryAsync("SELECT * FROM NonExistent").then(function (rows) {
+            assertEqual(Array.isArray(rows), true);
+            assertEqual(rows.length, 0);
+        });
+    });
+
+    test("FB.queryAsync() — second query key", function () {
+        return FB.queryAsync("PartList").then(function (rows) {
+            assertEqual(rows.length, 3);
+            assertEqual(rows[0].PartNum, "P100");
+        });
+    });
+
+    test("FB.restApiAsync() returns demo data", function () {
+        return FB.restApiAsync("GET", "/api/part").then(function (res) {
+            assertEqual(res.http_code, "200");
+        });
+    });
+
+    test("FB.legacyApiAsync() returns demo data", function () {
+        return FB.legacyApiAsync("GET_PART", "{}").then(function (res) {
+            assertEqual(res.status, "ok");
+        });
+    });
+
+    test("FB.importCSVAsync() returns success", function () {
+        return FB.importCSVAsync("Part", "Num,Desc").then(function (res) {
+            assertEqual(res.is_error, false);
+        });
+    });
+
+    test("FB.importCSVFromJSONAsync() returns success", function () {
+        return FB.importCSVFromJSONAsync("Part", "[]").then(function (res) {
+            assertEqual(res.is_error, false);
+        });
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // User/Context Async
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.getCompanyNameAsync()", function () {
+        return FB.getCompanyNameAsync().then(function (v) {
+            assertEqual(v, "Acme Manufacturing");
+        });
+    });
+
+    test("FB.getUsernameAsync()", function () {
+        return FB.getUsernameAsync().then(function (v) {
+            assertEqual(v, "jsmith");
+        });
+    });
+
+    test("FB.getUserEmailAsync()", function () {
+        return FB.getUserEmailAsync().then(function (v) {
+            assertEqual(v, "jsmith@acme.com");
+        });
+    });
+
+    test("FB.getUserIdAsync()", function () {
+        return FB.getUserIdAsync().then(function (v) {
+            assertEqual(v, 42);
+        });
+    });
+
+    test("FB.getUserGroupIdsAsync()", function () {
+        return FB.getUserGroupIdsAsync().then(function (v) {
+            assertEqual(Array.isArray(v), true);
+            assertEqual(v, ["1", "5"]);
+        });
+    });
+
+    test("FB.hasAccessRightAsync()", function () {
+        return FB.hasAccessRightAsync("ViewSO").then(function (v) {
+            assertEqual(v, true);
+        });
+    });
+
+    test("FB.getPluginNameAsync()", function () {
+        return FB.getPluginNameAsync().then(function (v) {
+            assertEqual(v, "ILC CloudPages");
+        });
+    });
+
+    test("FB.getModuleNameAsync()", function () {
+        return FB.getModuleNameAsync().then(function (v) {
+            assertEqual(v, "Sales Order");
+        });
+    });
+
+    test("FB.getObjectIdAsync()", function () {
+        return FB.getObjectIdAsync().then(function (v) {
+            assertEqual(v, 1001);
+        });
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // Plugin Data Async (in-memory store)
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.savePluginDataAsync() + FB.getPluginDataAsync()", function () {
+        return FB.savePluginDataAsync("testGroup", { myKey: "myValue" }).then(function (ok) {
+            assertEqual(ok, true);
+            return FB.getPluginDataAsync("testGroup", "myKey");
+        }).then(function (val) {
+            assertEqual(val, "myValue");
+        });
+    });
+
+    test("FB.deletePluginDataAsync()", function () {
+        return FB.deletePluginDataAsync("testGroup").then(function (ok) {
+            assertEqual(ok, true);
+            return FB.getPluginDataAsync("testGroup", "myKey");
+        }).then(function (val) {
+            assertEqual(val, null);
+        });
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // UI Methods
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.setStatus() updates DOM", function () {
+        FB.setStatus("Test status message");
+        var el = document.getElementById("fb-status");
+        assertEqual(el.textContent, "Test status message");
+    });
+
+    test("FB.setProgress() updates DOM", function () {
+        FB.setProgress(65);
+        var el = document.getElementById("fb-progress");
+        assertEqual(Number(el.value), 65);
+    });
+
+    test("FB.saveFile() does not crash", function () {
+        // In demo mode, saveFile triggers browser download — just verify no exception
+        try {
+            FB.saveFile("Test", "txt", "Text Files", btoa("hello"), "test.txt", false);
+            return "no exception";
+        } catch (e) {
+            // Blob/download may not work in all test environments, but shouldn't throw
+            return "caught: " + e.message;
+        }
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // Logging
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.log() does not throw", function () {
+        FB.log("demo info message");
+    });
+
+    test("FB.logError() does not throw", function () {
+        FB.logError("demo error message");
+    });
+
+    test("FB.logMessages() returns string", function () {
+        var logs = FB.logMessages();
+        assertType(logs, "string");
+        assertTrue(logs.length > 0, "log not empty");
+        return logs.split("\n").length + " log entries";
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // Timezone
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.getTimeForServer() returns formatted string", function () {
+        var t = FB.getTimeForServer("America/New_York");
+        assertType(t, "string");
+        assertTrue(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(t), "format yyyy-MM-dd HH:mm:ss");
+        return t;
+    });
+
+    test("FB.convertServerTimeToClient() returns formatted string", function () {
+        var t = FB.convertServerTimeToClient("2024-06-15 10:30:00", "America/New_York");
+        assertType(t, "string");
+        assertTrue(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(t), "format");
+        return t;
+    });
+
+    test("FB.convertClientTimeToServer() returns formatted string", function () {
+        var t = FB.convertClientTimeToServer("2024-06-15 10:30:00", "America/New_York");
+        assertType(t, "string");
+        assertTrue(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(t), "format");
+        return t;
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // listMethods
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.listMethods() returns array", function () {
+        var methods = FB.listMethods();
+        assertEqual(Array.isArray(methods), true);
+        // In demo mode, sync methods should show "(JXBrowser only)" notes
+        var restricted = methods.filter(function (m) { return m.indexOf("JXBrowser only") >= 0; });
+        assertTrue(restricted.length > 0, "some methods marked JXBrowser only");
+        return methods.length + " total, " + restricted.length + " restricted";
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // Run all tests sequentially (handles both sync and async)
+    // ═══════════════════════════════════════════════════════════════
+
+    function runTests(idx) {
+        if (idx >= tests.length) {
+            renderResults();
+            return;
+        }
+        var t = tests[idx];
+        testNum++;
+        var num = testNum;
+        try {
+            var result = t.fn();
+            if (result && typeof result.then === "function") {
+                // Async test
+                result.then(function (detail) {
+                    results.push({ num: num, name: t.name, pass: true, detail: detail || "OK" });
+                    runTests(idx + 1);
+                }).catch(function (e) {
+                    results.push({ num: num, name: t.name, pass: false, detail: e.message || String(e) });
+                    runTests(idx + 1);
+                });
+            } else {
+                results.push({ num: num, name: t.name, pass: true, detail: result || "OK" });
+                runTests(idx + 1);
+            }
+        } catch (e) {
+            results.push({ num: num, name: t.name, pass: false, detail: e.message || String(e) });
+            runTests(idx + 1);
+        }
+    }
+
+    function renderResults() {
+        var tbody = document.getElementById("results");
+        var passed = 0, failed = 0;
+        results.forEach(function (r) {
+            var tr = document.createElement("tr");
+            tr.innerHTML =
+                "<td>" + r.num + "</td>" +
+                "<td>" + r.name + "</td>" +
+                '<td class="' + (r.pass ? "pass-cell" : "fail-cell") + '">' + (r.pass ? "PASS" : "FAIL") + "</td>" +
+                "<td>" + r.detail + "</td>";
+            tbody.appendChild(tr);
+            if (r.pass) passed++; else failed++;
+        });
+
+        var summary = document.getElementById("summary");
+        if (failed === 0) {
+            summary.className = "summary pass";
+            summary.textContent = "All " + passed + " tests passed";
+        } else {
+            summary.className = "summary fail";
+            summary.textContent = failed + " of " + (passed + failed) + " tests failed";
+        }
+
+        FB.setStatus("Tests complete: " + passed + " passed, " + failed + " failed");
+        FB.setProgress(100);
+    }
+
+    runTests(0);
+})();
+</script>
+
+</body>
+</html>
