@@ -9,10 +9,29 @@ Cross-platform client library for ILC CloudPages.
 | Environment | Adapter | How it works |
 |---|---|---|
 | **JXBrowser** | `JXBrowserAdapter` | Delegates directly to `window.fb_client` (sync + async) |
+| **BI Script** | `BiScriptAdapter` | Delegates to the functions the BI Script / BI Report module injects on `window` (sync + async) |
 | **Web** | `WebAdapter` | Sends HTTP requests to a server API (async only) |
 | **Demo** | `DemoAdapter` | Returns static data from an in-memory config (async only) |
 
-Sync methods (e.g. `FB.query()`) are JXBrowser-only and throw `PlatformError` in other environments. Every sync method has an `Async` variant (e.g. `FB.queryAsync()`) that returns a `Promise` and works everywhere.
+Sync methods (e.g. `FB.query()`) are available on the two in-client bridges (JXBrowser and BI Script) and throw `PlatformError` in web/demo. Every sync method has an `Async` variant (e.g. `FB.queryAsync()`) that returns a `Promise` and works everywhere.
+
+### BI Script support
+
+The Fishbowl **BI Script / BI Report** module doesn't expose a `fb_client` object; instead it injects individual functions directly on `window` (`runQuery`, `runQueryAsync`, `getUser`, `hasUserAccess`, `runRestApiAsync`, `runApiRequest`, `getProperty`, `openModule`, `saveSettings`/`loadSettings`, `saveReportData`/`loadReportData`, and domain helpers). `fb.js` auto-detects this environment (`FB.environment === 'biscript'`, `FB.isBiScript === true`) and maps the overlapping surface onto the standard API so a page written for CloudPages runs unchanged inside a BI Script:
+
+| Standard API | BI Script bridge |
+|---|---|
+| `FB.query(sql, params)` / `FB.queryAsync(...)` | `runQuery` / `runQueryAsync` (params bound client-side — BI has no `:name` binder) |
+| `FB.restApiAsync(method, path, body)` | `runRestApiAsync({path, method, body})` (async only; sync `FB.restApi` throws) |
+| `FB.legacyApi(type, payload)` | `runApiRequest(type, json)` |
+| `FB.getUsername/getUserId/getUserEmail` | parsed from `getUser()` |
+| `FB.hasAccessRight(name)` | `hasUserAccess(name)` |
+| `FB.getPluginData/savePluginData` | `loadSettings/saveSettings` (key is `group::key`) |
+| `FB.setStatus/setProgress` etc. | no-op (BI has no dialog UI) |
+
+`getUser()` is returned with password, MFA secret and the group-relation list stripped server-side, so `FB.getUserGroupIds()` returns `[]` in BI. CSV import, report/PDF/printing, and CloudPages dialog UI have no BI equivalent and throw `PlatformError`.
+
+**BI-native extras** (no CloudPages equivalent) are exposed under `FB.bi.*`, mapping 1:1 to the injected functions: `getProperty`, `getLocationGroupList`, `openModule`, `roundMoney`, `formatCurrency`, `currencyLocale`, `getCompanyAddress`, `saveSettings`/`loadSettings`, `saveReportData`/`loadReportData`, `getImageFile`, `getIcon`, `getHighValueReport`, `getParentName`, `getAllTrackingInfo`, `getAutoPo`, `getAutoMo`, `runPickStatusHelper`. These throw `PlatformError` outside the BI Script environment.
 
 ## Project Structure
 

@@ -203,7 +203,9 @@
      * @param {string} method
      */
     function _syncGuard(method) {
-        if (_adapter && !(_adapter instanceof JXBrowserAdapter)) {
+        // Sync methods are available on the two in-client bridges (CloudPages
+        // JXBrowser and the BI Script module); web/demo are async-only.
+        if (_adapter && !(_adapter instanceof JXBrowserAdapter) && !(_adapter instanceof BiScriptAdapter)) {
             throw new PlatformError(method, FB.environment);
         }
     }
@@ -956,6 +958,182 @@
     DemoAdapter.prototype.logError = function (msg) { console.error('[FB Demo] ' + msg); };
 
     // ═══════════════════════════════════════════════════════════════════
+    // [5b] BiScriptAdapter
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * Adapter for the Fishbowl **BI Script / BI Report** module.
+     *
+     * Unlike CloudPages (which expose a single `window.fb_client` bridge object),
+     * the BI Script editor injects its bridge as individual functions directly on
+     * `window` — `runQuery`, `runQueryAsync`, `getUser`, `hasUserAccess`,
+     * `runRestApiAsync`, `runApiRequest`, `getProperty`, `openModule`,
+     * `saveSettings`/`loadSettings`, `saveReportData`/`loadReportData`, plus a set
+     * of domain helpers. (Source: BiBrowser.java, FB 2026.5.)
+     *
+     * This adapter maps the overlapping surface onto the standard FB.* contract so
+     * a page written for CloudPages runs unchanged inside a BI Script, and exposes
+     * the BI-native extras under `FB.bi.*`.
+     *
+     * Notable differences handled here:
+     *  - BI `runQuery` has NO parameter binding, so :name params are bound
+     *    client-side (safely quoted) before the call.
+     *  - BI `runQuery` returns a JSON **string** of rows (or null on error);
+     *    `runQueryAsync` returns an already-parsed array (and rejects on error).
+     *  - `getUser()` returns the SysUser JSON with password, MFA secret and the
+     *    group-relation list stripped by the server — so group IDs aren't
+     *    available (getUserGroupIds returns []).
+     *  - There is no sync REST, no CSV import, no report/print bridge, and no
+     *    CloudPages dialog UI — those throw PlatformError.
+     */
+    function BiScriptAdapter() {
+        this.w = (typeof window !== 'undefined') ? window : {};
+        this._user = undefined; // cached parsed getUser() result
+    }
+
+    function _biUnsupported(method) { throw new PlatformError(method, 'biscript'); }
+
+    /** Bind :name params into a SQL string, quoting/escaping safely (BI has no binder). */
+    function _biBind(sql, params) {
+        if (!params || typeof params !== 'object') return sql;
+        return String(sql).replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, function (m, name) {
+            if (!Object.prototype.hasOwnProperty.call(params, name)) return m;
+            var v = params[name];
+            if (v === null || v === undefined) return 'NULL';
+            if (typeof v === 'number') return String(v);
+            if (typeof v === 'boolean') return v ? '1' : '0';
+            return "'" + String(v).replace(/'/g, "''") + "'";
+        });
+    }
+
+    BiScriptAdapter.prototype._getUser = function () {
+        if (this._user === undefined) {
+            try { this._user = _safeParse(this.w.getUser()) || {}; }
+            catch (e) { this._user = {}; }
+        }
+        return this._user;
+    };
+
+    // -- Data operations --
+    BiScriptAdapter.prototype.runQuery = function (sql, params) {
+        var raw = this.w.runQuery(_biBind(sql, params));
+        if (raw === null || raw === undefined) {
+            return { is_error: true, error_msg: 'BI runQuery returned no data (query rejected or errored).' };
+        }
+        return raw; // JSON string; facade _parseAndCheck will parse
+    };
+    BiScriptAdapter.prototype.runQueryAsync = function (sql, params) {
+        var self = this;
+        return Promise.resolve(this.w.runQueryAsync(_biBind(sql, params)))
+            .catch(function (e) { throw new QueryError(sql, (e && (e.message || e.error_msg)) || String(e)); });
+    };
+    BiScriptAdapter.prototype.restApiCall = function () { _biUnsupported('restApi'); };
+    BiScriptAdapter.prototype.restApiCallAsync = function (method, path, body) {
+        var req = { path: path, method: method || 'GET' };
+        if (body !== null && body !== undefined) req.body = (typeof body === 'string') ? body : JSON.stringify(body);
+        return Promise.resolve(this.w.runRestApiAsync(req));
+    };
+    BiScriptAdapter.prototype.runApiJSON = function (type, payload) {
+        return this.w.runApiRequest(type, (typeof payload === 'string') ? payload : JSON.stringify(payload || {}));
+    };
+    BiScriptAdapter.prototype.runImportCSV = function () { _biUnsupported('importCSV'); };
+    BiScriptAdapter.prototype.runImportCSV_JSON = function () { _biUnsupported('importCSVFromJSON'); };
+
+    // -- User & context --
+    BiScriptAdapter.prototype.getCompanyName = function () {
+        var u = this._getUser(); return u.companyName || null;
+    };
+    BiScriptAdapter.prototype.getUsername = function () {
+        var u = this._getUser(); return u.userName || u.username || null;
+    };
+    BiScriptAdapter.prototype.getUserEmail = function () {
+        var u = this._getUser(); return u.email || null;
+    };
+    BiScriptAdapter.prototype.getUserId = function () {
+        var u = this._getUser(); return (u.id !== undefined ? u.id : (u.userId !== undefined ? u.userId : null));
+    };
+    BiScriptAdapter.prototype.getUserGroupIds = function () {
+        // getUser() strips the group-relation list server-side; not available in BI.
+        return [];
+    };
+    BiScriptAdapter.prototype.hasAccessRight = function (name) {
+        return !!this.w.hasUserAccess(name);
+    };
+    BiScriptAdapter.prototype.getPluginName = function () { return 'BI Script'; };
+    BiScriptAdapter.prototype.getModuleName = function () { return 'BI Script'; };
+    BiScriptAdapter.prototype.getObjectId = function () { return null; };
+
+    // -- Plugin data → mapped onto BI dashboard settings (single key/value) --
+    BiScriptAdapter.prototype._settingsKey = function (group, key) { return group + '::' + key; };
+    BiScriptAdapter.prototype.getPluginData = function (group, key) {
+        return this.w.loadSettings(this._settingsKey(group, key));
+    };
+    BiScriptAdapter.prototype.savePluginData = function (group, data) {
+        var map = (typeof data === 'string') ? _safeParse(data) : data;
+        if (!map || typeof map !== 'object') return false;
+        var self = this, ok = true;
+        Object.keys(map).forEach(function (k) {
+            var r = self.w.saveSettings(self._settingsKey(group, k), String(map[k]));
+            if (r === false) ok = false;
+        });
+        return ok;
+    };
+    BiScriptAdapter.prototype.deletePluginData = function () { _biUnsupported('deletePluginData'); };
+
+    // -- UI (no BI equivalent — degrade quietly) --
+    BiScriptAdapter.prototype.dialogStatus = function (msg) { /* no BI status bar */ _logBuffer.push('[status] ' + msg); };
+    BiScriptAdapter.prototype.pbUpdate = function () { /* no-op */ };
+    BiScriptAdapter.prototype.dialogClose = function () { return false; };
+    BiScriptAdapter.prototype.showStatusBar = function () { /* no-op */ };
+    BiScriptAdapter.prototype.toggleFullscreen = function () { /* no-op */ };
+    BiScriptAdapter.prototype.saveDataToFile = function () { _biUnsupported('saveFile'); };
+    BiScriptAdapter.prototype.getResourceFileString = function () { _biUnsupported('getResourceFile'); };
+    BiScriptAdapter.prototype.getResourceFileBase64 = function () { _biUnsupported('getResourceFileBase64'); };
+
+    // -- Platform actions --
+    BiScriptAdapter.prototype.hyperLink = function (module, param) { this.w.openModule(module, param); };
+    BiScriptAdapter.prototype.reloadObject = function () { _biUnsupported('reloadObject'); };
+    BiScriptAdapter.prototype.runScheduledTask = function () { _biUnsupported('runScheduledTask'); };
+    BiScriptAdapter.prototype.previewReport = function () { _biUnsupported('previewReport'); };
+    BiScriptAdapter.prototype.getReportPDF = function () { _biUnsupported('getReportPDF'); };
+    BiScriptAdapter.prototype.getMergedReportsPDF = function () { _biUnsupported('getMergedReportsPDF'); };
+    BiScriptAdapter.prototype.localPrinters = function () { _biUnsupported('localPrinters'); };
+    BiScriptAdapter.prototype.printPDF = function () { _biUnsupported('printPDF'); };
+    BiScriptAdapter.prototype.printReportPDF = function () { _biUnsupported('printReportPDF'); };
+    BiScriptAdapter.prototype.printMergedReportsPDF = function () { _biUnsupported('printMergedReportsPDF'); };
+    BiScriptAdapter.prototype.printMultipleReports = function () { _biUnsupported('printMultipleReports'); };
+    BiScriptAdapter.prototype.printZPL = function () { _biUnsupported('printZPL'); };
+    BiScriptAdapter.prototype.getTimeForServer = function () { _biUnsupported('getTimeForServer'); };
+
+    // -- Logging --
+    BiScriptAdapter.prototype.logInformation = function (msg) { _logBuffer.push(msg); console.log('[FB BI] ' + msg); };
+    BiScriptAdapter.prototype.logError = function (msg) { _logBuffer.push('[error] ' + msg); console.error('[FB BI] ' + msg); };
+
+    // -- Auto-generate the *Async variants the facade dispatches to for
+    //    non-JXBrowser adapters (wrap the sync method in a resolved Promise).
+    //    runQueryAsync / restApiCallAsync are defined natively above and kept. --
+    (function () {
+        var pairs = [
+            ['runApiJSONAsync', 'runApiJSON'], ['runImportCSVAsync', 'runImportCSV'],
+            ['runImportCSV_JSONAsync', 'runImportCSV_JSON'], ['getCompanyNameAsync', 'getCompanyName'],
+            ['getUsernameAsync', 'getUsername'], ['getUserEmailAsync', 'getUserEmail'],
+            ['getUserIdAsync', 'getUserId'], ['getUserGroupIdsAsync', 'getUserGroupIds'],
+            ['hasAccessRightAsync', 'hasAccessRight'], ['getPluginNameAsync', 'getPluginName'],
+            ['getModuleNameAsync', 'getModuleName'], ['getObjectIdAsync', 'getObjectId'],
+            ['getPluginDataAsync', 'getPluginData'], ['savePluginDataAsync', 'savePluginData'],
+            ['deletePluginDataAsync', 'deletePluginData'], ['getResourceFileStringAsync', 'getResourceFileString'],
+            ['getResourceFileBase64Async', 'getResourceFileBase64']
+        ];
+        pairs.forEach(function (p) {
+            var asyncName = p[0], syncName = p[1];
+            BiScriptAdapter.prototype[asyncName] = function () {
+                var self = this, args = arguments;
+                return Promise.resolve().then(function () { return self[syncName].apply(self, args); });
+            };
+        });
+    })();
+
+    // ═══════════════════════════════════════════════════════════════════
     // [9] Timezone Utilities (pure JS, works everywhere)
     // ═══════════════════════════════════════════════════════════════════
 
@@ -1136,6 +1314,17 @@
             return;
         }
 
+        // 1b. Check for the BI Script bridge (functions injected on window).
+        if (typeof window !== 'undefined' &&
+            typeof window.runQuery === 'function' &&
+            typeof window.runQueryAsync === 'function' &&
+            typeof window.getUser === 'function') {
+            _environment = 'biscript';
+            _adapter = new BiScriptAdapter();
+            _initialized = true;
+            return;
+        }
+
         // 2. Explicit environment from configure()
         if (_config.environment !== 'auto') {
             _environment = _config.environment;
@@ -1143,6 +1332,8 @@
                 _adapter = new JXBrowserAdapter();
                 _bridgeVersion = typeof window !== 'undefined' && window.fb_client &&
                     _hasBridgeMethod(window.fb_client, 'getTimeForServer') ? '2024' : '2025';
+            } else if (_environment === 'biscript') {
+                _adapter = new BiScriptAdapter();
             } else if (_environment === 'web') {
                 _adapter = new WebAdapter();
             } else {
@@ -1193,6 +1384,11 @@
 
     Object.defineProperty(FB, 'isJXBrowser', {
         get: function () { _ensureInit(); return _environment === 'jxbrowser'; },
+        enumerable: true
+    });
+
+    Object.defineProperty(FB, 'isBiScript', {
+        get: function () { _ensureInit(); return _environment === 'biscript'; },
         enumerable: true
     });
 
@@ -1967,20 +2163,85 @@
             var available = true;
             var note = '';
 
-            if (syncOnly.indexOf(name) >= 0 && _environment !== 'jxbrowser') {
+            var inClient = (_environment === 'jxbrowser' || _environment === 'biscript');
+
+            if (syncOnly.indexOf(name) >= 0 && !inClient) {
                 available = false;
-                note = ' (JXBrowser only - use ' + name + 'Async)';
+                note = ' (in-client only - use ' + name + 'Async)';
             }
 
             if (platformOnly.indexOf(name) >= 0 && _environment !== 'jxbrowser') {
-                available = false;
-                note = ' (JXBrowser only)';
+                // hyperLink maps to BI openModule; the rest have no BI equivalent.
+                available = (_environment === 'biscript' && name === 'hyperLink');
+                note = available ? '' : (_environment === 'biscript' ? ' (not available in BI Script)' : ' (JXBrowser only)');
             }
 
             methods.push(name + (available ? '' : note));
         });
 
         return methods;
+    };
+
+    // ═══════════════════════════════════════════════════════════════
+    // [11] BI Script native extras — FB.bi.*
+    // ═══════════════════════════════════════════════════════════════
+
+    // These map 1:1 to functions the BI Script module injects on `window` and
+    // have no CloudPages equivalent. They are only usable in the 'biscript'
+    // environment; elsewhere they throw PlatformError. Methods returning a JSON
+    // string are parsed for convenience.
+    function _biCall(method, args, parse) {
+        _ensureInit();
+        if (!(_adapter instanceof BiScriptAdapter)) throw new PlatformError('bi.' + method, FB.environment);
+        var fn = _adapter.w[method];
+        if (typeof fn !== 'function') throw new PlatformError('bi.' + method, FB.environment);
+        var out = fn.apply(_adapter.w, args);
+        return parse ? _safeParse(out) : out;
+    }
+
+    FB.bi = {
+        /** System/JVM property lookup. @returns {string} */
+        getProperty: function (name, defaultValue) { return _biCall('getProperty', [name, defaultValue]); },
+        /** Array of location-group IDs the user can see. @returns {number[]} */
+        getLocationGroupList: function () { return _biCall('getLocationGroupList', [], true); },
+        /** Open a Fishbowl module, optionally hyperlinking to an item. */
+        openModule: function (moduleName, item) { return _biCall('openModule', [moduleName, item]); },
+        /** Round a value using Fishbowl money rules. @returns {number} */
+        roundMoney: function (value, isTotal) { return _biCall('roundMoney', [value, !!isTotal]); },
+        /** Format a currency amount. @returns {string} */
+        formatCurrency: function (currencyId, amount, decimalFormat) { return _biCall('formatCurrency', [currencyId, amount, decimalFormat]); },
+        /** Home-currency locale + symbol. @returns {{locale:string,symbol:string}} */
+        currencyLocale: function () { return _biCall('currencyLocale', []); },
+        /** Company report address for a location group. @returns {string} */
+        getCompanyAddress: function (locationGroupId, showCountry) { return _biCall('getCompanyAddress', [locationGroupId, !!showCountry]); },
+        /** Persist a BI dashboard setting. @returns {boolean} */
+        saveSettings: function (key, value) { return _biCall('saveSettings', [key, value]); },
+        /** Read a BI dashboard setting. @returns {string} */
+        loadSettings: function (key) { return _biCall('loadSettings', [key]); },
+        /** Save data for the current BI report. @returns {boolean-ish string} */
+        saveReportData: function (data) { return _biCall('saveReportData', [data]); },
+        /** Load data for the current BI report. @returns {string} */
+        loadReportData: function () { return _biCall('loadReportData', []); },
+        /** Get an image file (returns raw bytes as a string). */
+        getImageFile: function (filePath) { return _biCall('getImageFile', [filePath]); },
+        /** Get a base64 status icon for PICK/WO/BOM. */
+        getIcon: function (orderType, statusId) { return _biCall('getIcon', [orderType, statusId]); },
+        /** High-value drill-down report HTML for a row. @returns {string} */
+        getHighValueReport: function (tableName, id) { return _biCall('getHighValueReport', [tableName, id]); },
+        /** Customer parent name. @returns {string} */
+        getParentName: function (parentId) { return _biCall('getParentName', [parentId]); },
+        /** All tracking info for rows of a table. @returns {*} parsed JSON */
+        getAllTrackingInfo: function (tableName, ids) { return _biCall('getAllTrackingInfo', [tableName, ids], true); },
+        /** Auto-PO suggestions. @returns {object[]} */
+        getAutoPo: function (vendorId, locationGroupId, qbClassId, showVendorPartNumber, includeNoRopOul, alwaysManufacture, startDate, endDate) {
+            return _biCall('getAutoPo', [vendorId, locationGroupId, qbClassId, showVendorPartNumber, includeNoRopOul, alwaysManufacture, startDate, endDate], true);
+        },
+        /** Auto-MO suggestions. @returns {object[]} */
+        getAutoMo: function (startDate, endDate, includeNoRop, includeConfigurable, locationGroupId, qbClassId) {
+            return _biCall('getAutoMo', [startDate, endDate, includeNoRop, includeConfigurable, locationGroupId, qbClassId], true);
+        },
+        /** Run the pick-status helper for a pick. */
+        runPickStatusHelper: function (pickId) { return _biCall('runPickStatusHelper', [pickId]); }
     };
 
     // ═══════════════════════════════════════════════════════════════
