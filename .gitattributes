@@ -1,0 +1,27 @@
+# Normalize all text files to LF in the repository, regardless of the
+# contributor's OS. Prevents CRLF working copies (e.g. Windows/WSL checkouts)
+# from showing every file as "modified".
+* text=auto eol=lf
+
+# Explicit text types (belt-and-suspenders)
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.cjs   text eol=lf
+*.json  text eol=lf
+*.html  text eol=lf
+*.css   text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.txt   text eol=lf
+*.sh    text eol=lf
+
+# Binary assets — never touch line endings
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.jar   binary
+*.pdf   binary
+*.zip   binary
