@@ -785,13 +785,23 @@
      * 2. Exact SQL string match
      * 3. Longest substring match
      * 4. Empty array fallback
+     *
+     * A matched entry may be a function instead of a rows array (only possible
+     * when demoData is passed inline via configure(), since JSON cannot hold
+     * functions). It is called with (params, sql) and its return value is used
+     * as the rows — this lets demo pages honor query parameters (filters,
+     * date ranges) instead of always returning the same static rows.
      * @param {string} sql
+     * @param {object} [params] - Query parameters, forwarded to function-valued entries.
      * @returns {Promise<Array>}
      */
-    DemoAdapter.prototype._matchQuery = function (sql) {
+    DemoAdapter.prototype._matchQuery = function (sql, params) {
         return this._ensureLoaded().then(function (data) {
             var queries = (data && data.queries) || {};
             var trimmedSql = (sql || '').trim();
+            function resolveEntry(v) {
+                return (typeof v === 'function') ? v(params || {}, trimmedSql) : v;
+            }
 
             // 1. Check if SQL text matches the content of a <script> tag, and
             //    that tag's ID is a key in the queries map.
@@ -801,14 +811,14 @@
                     var scriptEl = scripts[i];
                     if (scriptEl.id && scriptEl.textContent.trim() === trimmedSql) {
                         if (queries[scriptEl.id] !== undefined) {
-                            return queries[scriptEl.id];
+                            return resolveEntry(queries[scriptEl.id]);
                         }
                     }
                 }
             }
 
             // 2. Exact SQL match
-            if (queries[trimmedSql] !== undefined) return queries[trimmedSql];
+            if (queries[trimmedSql] !== undefined) return resolveEntry(queries[trimmedSql]);
 
             // 3. Longest substring match
             var bestKey = null;
@@ -825,15 +835,15 @@
                     bestLen = trimmedSql.length;
                 }
             }
-            if (bestKey !== null) return queries[bestKey];
+            if (bestKey !== null) return resolveEntry(queries[bestKey]);
 
             // 4. Fallback
             return [];
         });
     };
 
-    DemoAdapter.prototype.runQueryAsync = function (sql) {
-        return this._matchQuery(sql);
+    DemoAdapter.prototype.runQueryAsync = function (sql, params) {
+        return this._matchQuery(sql, params);
     };
 
     DemoAdapter.prototype.restApiCallAsync = function () {
