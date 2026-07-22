@@ -59,7 +59,16 @@ progress { width: 200px; }
                 { PartNum: "P100", Description: "Widget A", Price: 100 },
                 { PartNum: "P200", Description: "Widget B", Price: 100 },
                 { PartNum: "P300", Description: "Gadget X", Price: 200 }
-            ]
+            ],
+            // Function-valued entry: receives (params, sql), returns rows.
+            "FilteredParts": function (params) {
+                var max = (params && params.max_price !== undefined) ? params.max_price : Infinity;
+                return [
+                    { PartNum: "P100", Price: 100 },
+                    { PartNum: "P200", Price: 100 },
+                    { PartNum: "P300", Price: 200 }
+                ].filter(function (r) { return r.Price <= max; });
+            }
         },
         user: {
             companyName: "Acme Manufacturing",
@@ -178,6 +187,25 @@ progress { width: 200px; }
         return FB.queryAsync("PartList").then(function (rows) {
             assertEqual(rows.length, 3);
             assertEqual(rows[0].PartNum, "P100");
+        });
+    });
+
+    test("FB.queryAsync() — function entry receives params", function () {
+        return FB.queryAsync("FilteredParts", { max_price: 150 }).then(function (rows) {
+            assertEqual(rows.length, 2);
+            assertEqual(rows[0].PartNum, "P100");
+        });
+    });
+
+    test("FB.queryAsync() — function entry without params", function () {
+        return FB.queryAsync("FilteredParts").then(function (rows) {
+            assertEqual(rows.length, 3);
+        });
+    });
+
+    test("FB.queryAsync() — function entry via substring match", function () {
+        return FB.queryAsync("SELECT * FROM FilteredParts WHERE 1=1", { max_price: 100 }).then(function (rows) {
+            assertEqual(rows.length, 2, "params should reach substring-matched function entry");
         });
     });
 
