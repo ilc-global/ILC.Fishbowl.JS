@@ -9,7 +9,7 @@
  *   <script src="fb.js"></script>          // IIFE → window.FB
  *   import FB from './fb.js';              // ES module
  *
- * @version 1.0.0
+ * @version 0.0.0-dev
  * @license MIT
  * @see https://ilcdocs.atlassian.net/wiki/spaces/CPG
  */

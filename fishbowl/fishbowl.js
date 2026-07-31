@@ -9,6 +9,8 @@
  * No build tooling required — single <script> include.
  *
  * Column definitions sourced from Fishbowl Java server (fbcore-26.1).
+ *
+ * @version 0.0.0-dev
  */
 (function (root, factory) {
     'use strict';

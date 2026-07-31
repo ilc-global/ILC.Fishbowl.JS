@@ -1,5 +1,10 @@
 name: Build Release
 
+# The release version is generated HERE and stamped into the artifacts. It is never
+# stored in the repo: source files carry `@version 0.0.0-dev` and nobody hand-edits it.
+# That removes the class of bug where the tag and the file disagreed about what a
+# release was.
+
 on:
   workflow_dispatch:
   push:
@@ -23,13 +28,35 @@ jobs:
           DATE_VER=$(date -u +'%Y.%m.%d')
           echo "version=${DATE_VER}.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
 
-      - name: Build zip
+      - name: Stage files
         run: |
           mkdir -p dist
-          cp fb/fb.js dist/
-          cp fishbowl/fishbowl.js dist/
-          cp LICENSE dist/
-          cd dist && zip ../ILC.Fishbowl.JS-v${{ steps.version.outputs.version }}.zip fb.js fishbowl.js LICENSE
+          cp fb/fb.js fishbowl/fishbowl.js LICENSE dist/
+
+      # Stamp, then PROVE the stamp landed. A release whose bytes don't declare their own
+      # version is the exact failure this workflow exists to prevent, so it fails the build.
+      - name: Stamp version into artifacts
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          for f in dist/fb.js dist/fishbowl.js; do
+            sed -i -E "s/@version[[:space:]]+[^[:space:]*]+/@version ${VERSION}/" "$f"
+            if ! grep -q "@version ${VERSION}" "$f"; then
+              echo "::error file=${f}::version stamp did not apply — is the '@version' header missing?"
+              exit 1
+            fi
+            echo "stamped $(basename "$f") -> ${VERSION}"
+          done
+          if grep -rn "0.0.0-dev" dist/; then
+            echo "::error::a dist file still carries the 0.0.0-dev placeholder"
+            exit 1
+          fi
+
+      - name: Build zip
+        run: |
+          cd dist && zip ../ILC.Fishbowl.JS-v${{ steps.version.outputs.version }}.zip \
+            fb.js fishbowl.js LICENSE
 
       - name: Create release
         uses: softprops/action-gh-release@v2
