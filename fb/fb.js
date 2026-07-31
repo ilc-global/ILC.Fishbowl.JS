@@ -1651,6 +1651,22 @@
     _defineSimpleGetter('getObjectId', 'getObjectId', 'getObjectIdAsync');
 
     /**
+     * The Fishbowl client's active theme: 'dark' | 'light', or null when
+     * unavailable (web/demo, or a plugin build without getClientTheme).
+     * Deliberately bypasses the adapter layer: it's a JXBrowser-only nicety
+     * and must degrade to null everywhere else.
+     */
+    FB.getClientTheme = function () {
+        try {
+            if (window.fb_client && typeof window.fb_client.getClientTheme === 'function') {
+                var t = window.fb_client.getClientTheme();
+                if (t === 'dark' || t === 'light') return t;
+            }
+        } catch (e) { /* degrade */ }
+        return null;
+    };
+
+    /**
      * Check if user has an access right. Sync, JXBrowser only.
      * @param {string} name - Access right name.
      * @returns {boolean}
