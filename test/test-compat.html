@@ -80,6 +80,46 @@ tr:last-child td { border-bottom: none; }
             return JSON.stringify({ is_error: false, rows_imported: 3 });
         },
 
+        // Async operations. The real bridge does the work on a thread pool and
+        // then calls browser.executeJs("<name>(<json>)"), so the callback is
+        // reached by name off window and receives an already-parsed value, not
+        // a string. These mocks reproduce both, and defer with setTimeout so a
+        // test can tell a real async call from a promise around a sync one.
+        __asyncCalls: [],
+        runQueryParametersAsync: function (sql, jsonParams, cb) {
+            window.fb_client.__asyncCalls.push('runQueryParametersAsync');
+            var params = JSON.parse(jsonParams);
+            setTimeout(function () {
+                window[cb]([
+                    { ID: 1, Name: "Async Widget", Filter: params.filter || "none" },
+                    { ID: 2, Name: "Async Widget B", Filter: params.filter || "none" }
+                ]);
+            }, 0);
+        },
+        runQueryAsync: function (sql, cb) {
+            window.fb_client.runQueryParametersAsync(sql, "{}", cb);
+        },
+        restApiCallAsync: function (method, path, body, cb) {
+            window.fb_client.__asyncCalls.push('restApiCallAsync');
+            setTimeout(function () { window[cb]({ http_code: "200", response: '{"async":true}' }); }, 0);
+        },
+        runApiJSONAsync: function (type, payload, cb) {
+            window.fb_client.__asyncCalls.push('runApiJSONAsync');
+            setTimeout(function () { window[cb]({ status: "ok", type: type, async: true }); }, 0);
+        },
+        runImportCSVAsync: function (type, csv, cb) {
+            window.fb_client.__asyncCalls.push('runImportCSVAsync');
+            setTimeout(function () { window[cb]({ is_error: false, rows_imported: 5 }); }, 0);
+        },
+        runImportCSV_JSONAsync: function (type, json, cb) {
+            window.fb_client.__asyncCalls.push('runImportCSV_JSONAsync');
+            setTimeout(function () { window[cb]({ is_error: false, rows_imported: 3 }); }, 0);
+        },
+
+        // Misspelled in the Java, and therefore here. FB.serverLogMessages()
+        // is the correctly spelled wrapper over it.
+        serverLogMessges: function () { return "server log line 1\nserver log line 2"; },
+
         // User info
         getCompanyName: function () { return "Test Company Inc."; },
         getUsername: function () { return "testuser"; },
@@ -394,6 +434,13 @@ tr:last-child td { border-bottom: none; }
     // listMethods
     // ═══════════════════════════════════════════════════════════════
 
+    test("FB.serverLogMessages() reads the bridge's misspelled method", function () {
+        var log = FB.serverLogMessages();
+        assertType(log, "string");
+        assertEqual(/server log line 1/.test(log), true);
+        return log.split("\n").length + " lines";
+    });
+
     test("FB.listMethods() returns array of strings", function () {
         var methods = FB.listMethods();
         assertEqual(Array.isArray(methods), true);
@@ -447,6 +494,114 @@ tr:last-child td { border-bottom: none; }
         return FB.queryAsync("SELECT * FROM Part").then(function (rows) {
             assertEqual(Array.isArray(rows), true);
             assertEqual(rows.length, 2);
+        });
+    });
+
+    // ── The real bridge async path ────────────────────────────────────
+    // These prove the call goes through the bridge's own async method and
+    // not through a promise wrapped around the blocking one. That difference
+    // is the whole point: the blocking version freezes the Fishbowl client
+    // for as long as the query runs.
+
+    testAsync("FB.queryAsync() uses the bridge's runQueryParametersAsync", function () {
+        window.fb_client.__asyncCalls = [];
+        return FB.queryAsync("SELECT * FROM Part").then(function (rows) {
+            assertEqual(window.fb_client.__asyncCalls, ['runQueryParametersAsync']);
+            assertEqual(rows[0].Name, "Async Widget");
+        });
+    });
+
+    testAsync("FB.queryAsync() does not resolve before it yields", function () {
+        var settledSynchronously = true;
+        var p = FB.queryAsync("SELECT 1").then(function () {
+            // If this ran while the caller's stack was still live, the call
+            // blocked and the promise was already resolved.
+            assertEqual(settledSynchronously, false, "resolved without yielding");
+        });
+        settledSynchronously = false;
+        return p;
+    });
+
+    testAsync("FB.queryAsync() passes parameters through", function () {
+        return FB.queryAsync("SELECT * FROM Part WHERE x = :filter", { filter: "abc" })
+            .then(function (rows) {
+                assertEqual(rows[0].Filter, "abc");
+            });
+    });
+
+    testAsync("FB.restApiAsync() uses the bridge's restApiCallAsync", function () {
+        window.fb_client.__asyncCalls = [];
+        return FB.restApiAsync("GET", "/api/part/1").then(function (res) {
+            assertEqual(window.fb_client.__asyncCalls, ['restApiCallAsync']);
+            assertEqual(res.http_code, "200");
+        });
+    });
+
+    testAsync("FB.legacyApiAsync() uses the bridge's runApiJSONAsync", function () {
+        window.fb_client.__asyncCalls = [];
+        return FB.legacyApiAsync("GET_PART", "{}").then(function (res) {
+            assertEqual(window.fb_client.__asyncCalls, ['runApiJSONAsync']);
+            assertEqual(res.async, true);
+        });
+    });
+
+    testAsync("FB.importCSVAsync() uses the bridge's runImportCSVAsync", function () {
+        window.fb_client.__asyncCalls = [];
+        return FB.importCSVAsync("Part", "a,b\n1,2").then(function (res) {
+            assertEqual(window.fb_client.__asyncCalls, ['runImportCSVAsync']);
+            assertEqual(res.rows_imported, 5);
+        });
+    });
+
+    testAsync("FB.importCSVFromJSONAsync() uses the bridge's runImportCSV_JSONAsync", function () {
+        window.fb_client.__asyncCalls = [];
+        return FB.importCSVFromJSONAsync("Part", '["1,2"]').then(function (res) {
+            assertEqual(window.fb_client.__asyncCalls, ['runImportCSV_JSONAsync']);
+            assertEqual(res.rows_imported, 3);
+        });
+    });
+
+    testAsync("an async error arrives as a rejection, not a resolved error object", function () {
+        var original = window.fb_client.runQueryParametersAsync;
+        window.fb_client.runQueryParametersAsync = function (sql, p, cb) {
+            setTimeout(function () { window[cb]({ is_error: true, error_msg: "boom" }); }, 0);
+        };
+        return FB.queryAsync("SELECT bad").then(function () {
+            throw new Error("should have rejected");
+        }, function (err) {
+            assertEqual(/boom/.test(err.message), true, "error message carried through");
+        }).then(function () {
+            window.fb_client.runQueryParametersAsync = original;
+        }, function (e) {
+            window.fb_client.runQueryParametersAsync = original;
+            throw e;
+        });
+    });
+
+    testAsync("falls back to the sync call on a bridge without async methods", function () {
+        // A plugin build older than the async work. The answer must still be
+        // right; it is only the blocking that comes back.
+        var saved = {};
+        ['runQueryParametersAsync', 'runQueryAsync'].forEach(function (m) {
+            saved[m] = window.fb_client[m];
+            delete window.fb_client[m];
+        });
+        return FB.queryAsync("SELECT * FROM Part").then(function (rows) {
+            assertEqual(rows.length, 2);
+            assertEqual(rows[0].Name, "Widget A", "came from the sync runQuery");
+        }).then(function () {
+            Object.keys(saved).forEach(function (m) { window.fb_client[m] = saved[m]; });
+        }, function (e) {
+            Object.keys(saved).forEach(function (m) { window.fb_client[m] = saved[m]; });
+            throw e;
+        });
+    });
+
+    testAsync("the callback global is cleaned up after it fires", function () {
+        var before = Object.keys(window).filter(function (k) { return /^__fbAsyncCb_/.test(k); }).length;
+        return FB.queryAsync("SELECT 1").then(function () {
+            var after = Object.keys(window).filter(function (k) { return /^__fbAsyncCb_/.test(k); }).length;
+            assertEqual(after, before, "no callback globals left behind");
         });
     });
 

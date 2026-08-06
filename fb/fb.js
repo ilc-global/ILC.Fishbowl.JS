@@ -121,6 +121,56 @@
         catch (e) { return false; }
     }
 
+    /** Serial number for the callback names handed to the Java bridge. */
+    var _bridgeCbSeq = 0;
+
+    /**
+     * Run a bridge method that answers through a JavaScript callback.
+     *
+     * The bridge's async methods take the NAME of a global function and, when
+     * the work finishes on its thread pool, call it back on the UI thread:
+     *   browser.executeJs("myCallback({...json...})")
+     * So the function has to be reachable as a bare identifier — a property of
+     * window — and the value that arrives is already parsed by the JS engine,
+     * not a string.
+     *
+     * Errors arrive through the same callback as {is_error, error_msg}, so this
+     * resolves in both cases and leaves the checking to _parseAndCheck.
+     *
+     * There is deliberately no timeout. A Fishbowl query can legitimately run
+     * for minutes, and a promise that rejects while the query is still running
+     * would report a failure that did not happen.
+     *
+     * @param {function(string)} invoke - Called with the callback's name.
+     * @returns {Promise<*>} Resolves with whatever the bridge passes back.
+     */
+    function _bridgeAsync(invoke) {
+        return new Promise(function (resolve, reject) {
+            var name = '__fbAsyncCb_' + (++_bridgeCbSeq);
+            var settled = false;
+
+            function release() {
+                try { delete window[name]; }
+                catch (e) { window[name] = undefined; }   // old IE-style hosts
+            }
+
+            window[name] = function (result) {
+                if (settled) return;                      // a bridge that calls twice
+                settled = true;
+                release();
+                resolve(result);
+            };
+
+            try {
+                invoke(name);
+            } catch (e) {
+                settled = true;
+                release();
+                reject(e);
+            }
+        });
+    }
+
     /**
      * Safely parse a JSON string. Returns the parsed value, or the
      * original value if it is already an object or if parsing fails.
@@ -302,6 +352,92 @@
     /** @param {string} type  @param {string} json  @returns {string} */
     JXBrowserAdapter.prototype.runImportCSV_JSON = function (type, json) {
         return this.client.runImportCSV_JSON(type, json);
+    };
+
+    // -- Data Operations, asynchronous ----------------------------------
+    //
+    // The bridge runs these on its own thread pool and answers through a
+    // callback, so the Fishbowl client stays responsive while the work runs.
+    // The sync methods above block the UI thread for their whole duration —
+    // on a slow query that is a frozen client, which is what these exist to
+    // avoid.
+    //
+    // Each falls back to the sync call wrapped in a resolved promise when the
+    // bridge does not carry the async method. A plugin build older than the
+    // async work still returns the right answer; it just blocks while doing it.
+
+    /** @param {string} sql  @param {object} [params]  @returns {Promise<*>} */
+    JXBrowserAdapter.prototype.runQueryAsync = function (sql, params) {
+        var self = this;
+        // runQueryParametersAsync covers both cases: the bridge's own
+        // runQueryAsync just calls it with an empty parameter object.
+        if (_hasBridgeMethod(this.client, 'runQueryParametersAsync')) {
+            var json = JSON.stringify(params || {});
+            return _bridgeAsync(function (cb) {
+                self.client.runQueryParametersAsync(sql, json, cb);
+            });
+        }
+        return Promise.resolve().then(function () { return self.runQuery(sql, params); });
+    };
+
+    /** @param {string} method  @param {string} path  @param {string} [body]  @returns {Promise<*>} */
+    JXBrowserAdapter.prototype.restApiCallAsync = function (method, path, body) {
+        var self = this;
+        if (_hasBridgeMethod(this.client, 'restApiCallAsync')) {
+            return _bridgeAsync(function (cb) {
+                self.client.restApiCallAsync(method, path, body || null, cb);
+            });
+        }
+        return Promise.resolve().then(function () { return self.restApiCall(method, path, body); });
+    };
+
+    /** @param {string} type  @param {string} payload  @returns {Promise<*>} */
+    JXBrowserAdapter.prototype.runApiJSONAsync = function (type, payload) {
+        var self = this;
+        if (_hasBridgeMethod(this.client, 'runApiJSONAsync')) {
+            return _bridgeAsync(function (cb) {
+                self.client.runApiJSONAsync(type, payload, cb);
+            });
+        }
+        return Promise.resolve().then(function () { return self.runApiJSON(type, payload); });
+    };
+
+    /** @param {string} type  @param {string} csv  @returns {Promise<*>} */
+    JXBrowserAdapter.prototype.runImportCSVAsync = function (type, csv) {
+        var self = this;
+        if (_hasBridgeMethod(this.client, 'runImportCSVAsync')) {
+            return _bridgeAsync(function (cb) {
+                self.client.runImportCSVAsync(type, csv, cb);
+            });
+        }
+        return Promise.resolve().then(function () { return self.runImportCSV(type, csv); });
+    };
+
+    /** @param {string} type  @param {string} json  @returns {Promise<*>} */
+    JXBrowserAdapter.prototype.runImportCSV_JSONAsync = function (type, json) {
+        var self = this;
+        if (_hasBridgeMethod(this.client, 'runImportCSV_JSONAsync')) {
+            return _bridgeAsync(function (cb) {
+                self.client.runImportCSV_JSONAsync(type, json, cb);
+            });
+        }
+        return Promise.resolve().then(function () { return self.runImportCSV_JSON(type, json); });
+    };
+
+    /**
+     * The server's log messages.
+     *
+     * The bridge method is spelled `serverLogMessges` — the typo is in the Java
+     * and has shipped for years, so it is what must be called. The name on this
+     * side is spelled correctly, and that is the whole point of the wrapper.
+     *
+     * @returns {string}
+     */
+    JXBrowserAdapter.prototype.serverLogMessages = function () {
+        if (_hasBridgeMethod(this.client, 'serverLogMessges')) {
+            return this.client.serverLogMessges();
+        }
+        return '';
     };
 
     /** @returns {string} */
@@ -1472,12 +1608,6 @@
      */
     FB.queryAsync = function (sql, params) {
         _ensureInit();
-        if (_adapter instanceof JXBrowserAdapter) {
-            return Promise.resolve().then(function () {
-                var raw = _adapter.runQuery(sql, params);
-                return _parseAndCheck(raw, true, sql);
-            });
-        }
         return _adapter.runQueryAsync(sql, params).then(function (result) {
             return _parseAndCheck(result, true, sql);
         });
@@ -1506,12 +1636,6 @@
      */
     FB.restApiAsync = function (method, path, body) {
         _ensureInit();
-        if (_adapter instanceof JXBrowserAdapter) {
-            return Promise.resolve().then(function () {
-                var raw = _adapter.restApiCall(method, path, body || null);
-                return _parseAndCheck(raw, true);
-            });
-        }
         return _adapter.restApiCallAsync(method, path, body).then(function (result) {
             return _parseAndCheck(result, true);
         });
@@ -1556,12 +1680,6 @@
             type = typeOrRq;
             str = payload;
         }
-        if (_adapter instanceof JXBrowserAdapter) {
-            return Promise.resolve().then(function () {
-                var raw = _adapter.runApiJSON(type, str);
-                return _parseAndCheck(raw, true);
-            });
-        }
         return _adapter.runApiJSONAsync(type, str).then(function (result) {
             return _parseAndCheck(result, true);
         });
@@ -1583,12 +1701,6 @@
     /** @param {string} type  @param {string} csv  @returns {Promise<object>} */
     FB.importCSVAsync = function (type, csv) {
         _ensureInit();
-        if (_adapter instanceof JXBrowserAdapter) {
-            return Promise.resolve().then(function () {
-                var raw = _adapter.runImportCSV(type, csv);
-                return _parseAndCheck(raw, true);
-            });
-        }
         return _adapter.runImportCSVAsync(type, csv).then(function (result) {
             return _parseAndCheck(result, true);
         });
@@ -1610,12 +1722,6 @@
     /** @param {string} type  @param {string} json  @returns {Promise<object>} */
     FB.importCSVFromJSONAsync = function (type, json) {
         _ensureInit();
-        if (_adapter instanceof JXBrowserAdapter) {
-            return Promise.resolve().then(function () {
-                var raw = _adapter.runImportCSV_JSON(type, json);
-                return _parseAndCheck(raw, true);
-            });
-        }
         return _adapter.runImportCSV_JSONAsync(type, json).then(function (result) {
             return _parseAndCheck(result, true);
         });
@@ -2054,6 +2160,23 @@
         }).join('\n');
     };
 
+    /**
+     * The Fishbowl server's own log messages. JXBrowser only.
+     *
+     * Returns an empty string elsewhere, and on a plugin build that does not
+     * carry the call, because a diagnostic that throws is worse than one that
+     * says nothing.
+     *
+     * @returns {string} The server log, or '' when unavailable.
+     */
+    FB.serverLogMessages = function () {
+        _ensureInit();
+        if (_adapter instanceof JXBrowserAdapter) {
+            return _adapter.serverLogMessages();
+        }
+        return '';
+    };
+
     // ═══════════════════════════════════════════════════════════════
     // [9] Timezone — Pure JS, works everywhere
     // ═══════════════════════════════════════════════════════════════
@@ -2163,7 +2286,7 @@
             'getReportPDF', 'getMergedReportsPDF', 'localPrinters',
             'printPDF', 'printReportPDF', 'printMergedReportsPDF', 'printMultipleReports', 'printZPL',
             // Logging
-            'log', 'logError', 'logMessages',
+            'log', 'logError', 'logMessages', 'serverLogMessages',
             // Timezone
             'getTimeForServer', 'convertServerTimeToClient', 'convertClientTimeToServer',
             // Developer

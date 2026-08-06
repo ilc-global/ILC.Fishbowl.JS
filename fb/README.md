@@ -134,6 +134,18 @@ Call `FB.configure(opts)` before any data methods. All options are optional.
 
 Sync methods return parsed data directly. Async variants (`queryAsync`, `restApiAsync`, etc.) return a `Promise`.
 
+**In the Fishbowl client, the async variants are genuinely non-blocking.** They
+call the bridge's own async methods (`runQueryParametersAsync`,
+`restApiCallAsync`, `runApiJSONAsync`, `runImportCSVAsync`,
+`runImportCSV_JSONAsync`), which run the work on the plugin's thread pool and
+answer through a callback. The sync methods block the JxBrowser UI thread for
+the whole call, so a slow query freezes the client — prefer the async variant
+for anything a person waits on.
+
+A plugin build without those bridge methods falls back to the sync call wrapped
+in a resolved promise: the same answer, still blocking. Nothing to configure;
+`fb.js` detects it.
+
 ### User & Context
 
 | Method | Sync | Async | Description |
@@ -199,6 +211,10 @@ These methods are only available inside JXBrowser. In other environments, behavi
 | `log(msg)` | All | Log an info message |
 | `logError(msg)` | All | Log an error message |
 | `logMessages()` | All | Flush the log buffer and return all messages |
+| `serverLogMessages()` | JXB | The Fishbowl server's log. `''` elsewhere, and on a bridge that lacks it |
+
+The bridge spells its method `serverLogMessges` — the typo is in the Java and
+has shipped for years. `fb.js` wraps it under the correct spelling.
 
 ### Timezone
 

@@ -1,6 +1,6 @@
 # fb.js Test Suite
 
-106 tests across 3 test pages covering JXBrowser, Demo, and Web adapters.
+127 tests across 3 test pages covering JXBrowser, Demo, and Web adapters.
 
 ## Running Tests
 
@@ -9,9 +9,9 @@
 Requires Node.js and Puppeteer (`npm install puppeteer`).
 
 ```bash
-node run-tests.js              # run all 106 tests
-node run-tests.js compat       # run test-compat.html only (41 tests)
-node run-tests.js demo         # run test-demo.html only (34 tests)
+node run-tests.js              # run all 127 tests
+node run-tests.js compat       # run test-compat.html only (59 tests)
+node run-tests.js demo         # run test-demo.html only (37 tests)
 node run-tests.js web          # run test-web.html only (31 tests)
 ```
 
@@ -27,7 +27,7 @@ Open HTML files directly for interactive debugging:
 
 ## Test Pages
 
-### test-compat.html — 41 tests
+### test-compat.html — 59 tests
 
 Tests the JXBrowserAdapter using a fake `window.fb_client` object. Covers:
 
@@ -41,7 +41,7 @@ Tests the JXBrowserAdapter using a fake `window.fb_client` object. Covers:
 - Timezone: `getTimeForServer`, `convertServerTimeToClient`, `convertClientTimeToServer`
 - `FB.compat()` globals: `fb_query`, `setStatus`, `setProgress`, `getSQL`
 
-### test-demo.html — 34 tests
+### test-demo.html — 37 tests
 
 Tests the DemoAdapter with inline demo data. Covers:
 
