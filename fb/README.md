@@ -216,6 +216,52 @@ These methods are only available inside JXBrowser. In other environments, behavi
 The bridge spells its method `serverLogMessges` — the typo is in the Java and
 has shipped for years. `fb.js` wraps it under the correct spelling.
 
+### Hardware (2025.11 plugin and later)
+
+Check `FB.hasHardware` first — it is feature-detected, not inferred from a
+version. The 2024.12 plugin targets Java 1.8 and cannot carry this bridge.
+
+| Namespace | Methods |
+|---|---|
+| `FB.scale` | `list()` `start(handler)` `stop()` `snapshot()` `config()` |
+| `FB.scanner` | `on('scan', handler)` `status()` `open(port?, baud?)` `close()` `dispatchKeyboardScan(text)` `config()` |
+| `FB.serial` | `list()` `open({port, baud, startChar, endChar})` `close()` `status()` |
+| `FB.tcp` | `connect(host, port)` `send(id, data)` `close(id)` `list()` `on('data', handler)` |
+| `FB.printNetworkZPL(host, port, zpl)` | one-shot connect → send → close, usually port 9100 |
+
+```javascript
+if (FB.hasHardware) {
+    FB.scale.start(function (f) { show(f.lbs, f.stable); });   // streams until stop()
+    var off = FB.scanner.on('scan', function (s) { add(s.raw); });
+    FB.tcp.connect('10.0.0.50', 9100).then(function (id) { return FB.tcp.send(id, 'W\r\n'); });
+}
+```
+
+**Streams are events, not promises.** `FB.scale.start` calls its handler
+repeatedly — roughly every 100 ms, and it keeps going across an unplug because
+the poller reconnects. Scans and inbound TCP bytes never reach a callback at
+all: the plugin dispatches `ilc-scan` and `ilc-tcp-data` window events, and
+`FB.scanner.on` / `FB.tcp.on` wrap them. Both return an unsubscribe function —
+a page that opens a device and never lets go leaks across navigations.
+
+`FB.tcp.on('data')` decodes the event's base64 and hands the handler
+`{id, text, base64}`.
+
+**A scale frame's `unit` is not the unit of its value.** `lbs` is always pounds,
+whatever the scale reports in; `unit` names what the device itself is using.
+A Dymo reading 11.7 oz gives `{lbs: 0.7313, unit: "oz"}` — 0.7313 pounds, from
+a scale set to ounces. Rendering `f.lbs + ' ' + f.unit` prints a wrong number
+with a wrong unit. Verified against the hardware, 2026-08-06.
+
+One-shot hardware calls that can fail — `FB.tcp.connect`, `FB.tcp.send`,
+`FB.serial.open` — reject when the bridge answers `{ok: false}`, so a failure
+to open a port reads like every other failure in this library.
+
+> The hardware bridge base64-round-trips its payloads and calls back with
+> `atob(...)`, so every hardware answer arrives as a **JSON string**, unlike the
+> data methods, which hand over a value the JS engine has already parsed.
+> `fb.js` parses hardware payloads for you; do not parse them twice.
+
 ### Timezone
 
 | Method | Platform | Description |

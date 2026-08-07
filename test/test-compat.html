@@ -120,6 +120,73 @@ tr:last-child td { border-bottom: none; }
         // is the correctly spelled wrapper over it.
         serverLogMessges: function () { return "server log line 1\nserver log line 2"; },
 
+        // ── Hardware (2025.11 plugin) ──────────────────────────────────
+        // Every hardware answer is a JSON STRING: the plugin base64-round-trips
+        // its payloads and calls back with atob(...), unlike the data methods
+        // which hand over an already-parsed value. These mocks stringify for
+        // that reason — a wrapper that forgets to parse must fail here.
+        scaleListScales: function () {
+            return JSON.stringify([{ vendorId: "0x0922", productId: "0x8003", label: "DYMO M25" }]);
+        },
+        __scaleTimer: null,
+        scaleStart: function (cb) {
+            var n = 0;
+            window.fb_client.__scaleTimer = setInterval(function () {
+                n++;
+                window[cb](JSON.stringify({ lbs: n * 1.5, stable: n > 1, status: 4, unit: "lbs" }));
+            }, 10);
+        },
+        scaleStop: function () {
+            clearInterval(window.fb_client.__scaleTimer);
+            window.fb_client.__scaleTimer = null;
+        },
+        scaleGetSnapshot: function () {
+            return JSON.stringify({ lbs: 4.5, stable: true, connected: true });
+        },
+        hardwareGetScaleConfig: function () { return JSON.stringify({ vendorId: 0, productId: 0 }); },
+        hardwareGetScannerConfig: function () { return JSON.stringify({ mode: "hid", port: "", baud: 9600 }); },
+
+        scannerGetStatus: function () { return "active"; },
+        scannerOpen: function (port, baud) { window.fb_client.__scannerOpened = [port, baud]; },
+        scannerClose: function () { window.fb_client.__scannerOpened = null; },
+        scannerDispatchKeyboardScan: function (text) {
+            window.dispatchEvent(new CustomEvent('ilc-scan', {
+                detail: { raw: text, symbology: null, aim_id: null, source: 'keyboard', timestamp: Date.now() }
+            }));
+        },
+
+        serialListPorts: function () { return JSON.stringify([{ port: "COM3", description: "Zebra CDC" }]); },
+        serialOpen: function (optionsJson, cb) {
+            var o = JSON.parse(optionsJson);
+            setTimeout(function () {
+                window[cb](JSON.stringify(o.port ? { ok: true } : { ok: false, error: "no port given" }));
+            }, 0);
+        },
+        serialClose: function () { },
+        serialGetStatus: function () { return "open"; },
+
+        tcpConnect: function (host, port, cb) {
+            setTimeout(function () {
+                window[cb](JSON.stringify(host === 'bad.host'
+                    ? { ok: false, error: "connect timed out" }
+                    : { ok: true, id: "conn-1" }));
+            }, 0);
+        },
+        tcpSend: function (id, data, cb) {
+            setTimeout(function () {
+                window[cb](JSON.stringify({ ok: true }));
+                // Mimic a reply arriving on the inbound event.
+                window.dispatchEvent(new CustomEvent('ilc-tcp-data', {
+                    detail: { id: id, base64: btoa("12.5 lb\r\n") }
+                }));
+            }, 0);
+        },
+        tcpClose: function () { },
+        tcpListConnections: function () { return JSON.stringify([{ id: "conn-1", connected: true }]); },
+        printNetworkZPL: function (host, port, zpl) {
+            return JSON.stringify(host === 'bad.host' ? { ok: false, error: "unreachable" } : { ok: true });
+        },
+
         // User info
         getCompanyName: function () { return "Test Company Inc."; },
         getUsername: function () { return "testuser"; },
@@ -434,6 +501,87 @@ tr:last-child td { border-bottom: none; }
     // listMethods
     // ═══════════════════════════════════════════════════════════════
 
+    // ═══════════════════════════════════════════════════════════════
+    // Hardware
+    // ═══════════════════════════════════════════════════════════════
+
+    test("FB.hasHardware is true when the bridge carries it", function () {
+        assertEqual(FB.hasHardware, true);
+    });
+
+    test("FB.scale.list() parses the JSON string the bridge returns", function () {
+        var scales = FB.scale.list();
+        assertEqual(Array.isArray(scales), true, "parsed, not left as text");
+        assertEqual(scales[0].label, "DYMO M25");
+        return scales.length + " scale(s)";
+    });
+
+    test("FB.scale.snapshot() parses", function () {
+        var s = FB.scale.snapshot();
+        assertEqual(typeof s, "object");
+        assertEqual(s.lbs, 4.5);
+    });
+
+    test("FB.scale.config() parses", function () {
+        assertEqual(typeof FB.scale.config(), "object");
+    });
+
+    test("FB.scanner.status() returns the plain string", function () {
+        assertEqual(FB.scanner.status(), "active");
+    });
+
+    test("FB.scanner.open() passes port and baud through", function () {
+        FB.scanner.open("COM3", 9600);
+        assertEqual(window.fb_client.__scannerOpened, ["COM3", 9600]);
+        FB.scanner.close();
+        assertEqual(window.fb_client.__scannerOpened, null);
+    });
+
+    test("FB.serial.list() parses", function () {
+        assertEqual(FB.serial.list()[0].port, "COM3");
+    });
+
+    test("FB.serial.status() returns the plain string", function () {
+        assertEqual(FB.serial.status(), "open");
+    });
+
+    test("FB.tcp.list() parses", function () {
+        assertEqual(FB.tcp.list()[0].id, "conn-1");
+    });
+
+    test("FB.printNetworkZPL() parses the result", function () {
+        assertEqual(FB.printNetworkZPL("10.0.0.50", 9100, "^XA^XZ").ok, true);
+        assertEqual(FB.printNetworkZPL("bad.host", 9100, "^XA^XZ").ok, false);
+    });
+
+    test("a scan arrives as an ilc-scan event, not a callback", function () {
+        var got = null;
+        var off = FB.scanner.on('scan', function (s) { got = s; });
+        FB.scanner.dispatchKeyboardScan("ABC-123");
+        off();
+        assertEqual(got && got.raw, "ABC-123");
+        assertEqual(got && got.source, "keyboard");
+        return got.source;
+    });
+
+    test("FB.scanner.on() unsubscribe actually detaches", function () {
+        var count = 0;
+        var off = FB.scanner.on('scan', function () { count++; });
+        FB.scanner.dispatchKeyboardScan("first");
+        off();
+        FB.scanner.dispatchKeyboardScan("second");
+        assertEqual(count, 1, "handler ran once, not twice");
+    });
+
+    test("FB.scanner.on() rejects an unknown event name", function () {
+        try {
+            FB.scanner.on('nope', function () { });
+            throw new Error("should have thrown");
+        } catch (e) {
+            assertEqual(/unknown event/.test(e.message), true);
+        }
+    });
+
     test("FB.serverLogMessages() reads the bridge's misspelled method", function () {
         var log = FB.serverLogMessages();
         assertType(log, "string");
@@ -594,6 +742,68 @@ tr:last-child td { border-bottom: none; }
         }, function (e) {
             Object.keys(saved).forEach(function (m) { window.fb_client[m] = saved[m]; });
             throw e;
+        });
+    });
+
+    testAsync("FB.scale.start() streams frames until stop()", function () {
+        return new Promise(function (resolve, reject) {
+            var frames = [];
+            FB.scale.start(function (f) { frames.push(f); });
+            setTimeout(function () {
+                FB.scale.stop();
+                var after = frames.length;
+                setTimeout(function () {
+                    try {
+                        assertEqual(frames.length > 2, true, "streamed more than one frame, got " + frames.length);
+                        assertEqual(typeof frames[0].lbs, "number", "frame was parsed from its JSON string");
+                        assertEqual(frames[0].unit, "lbs");
+                        assertEqual(frames.length, after, "stop() ended the stream");
+                        resolve();
+                    } catch (e) { reject(e); }
+                }, 60);
+            }, 120);
+        });
+    });
+
+    testAsync("FB.tcp.connect() resolves with the connection id", function () {
+        return FB.tcp.connect("10.0.0.50", 9100).then(function (id) {
+            assertEqual(id, "conn-1");
+        });
+    });
+
+    testAsync("FB.tcp.connect() rejects when the bridge says ok:false", function () {
+        return FB.tcp.connect("bad.host", 9100).then(function () {
+            throw new Error("should have rejected");
+        }, function (err) {
+            assertEqual(/connect timed out/.test(err.message), true);
+        });
+    });
+
+    testAsync("FB.tcp inbound data is decoded from base64", function () {
+        return new Promise(function (resolve, reject) {
+            var off = FB.tcp.on('data', function (d) {
+                off();
+                try {
+                    assertEqual(d.text, "12.5 lb\r\n", "decoded");
+                    assertEqual(typeof d.base64, "string", "raw base64 still offered");
+                    resolve();
+                } catch (e) { reject(e); }
+            });
+            FB.tcp.send("conn-1", "W\r\n");
+        });
+    });
+
+    testAsync("FB.serial.open() rejects on ok:false", function () {
+        return FB.serial.open({ baud: 9600 }).then(function () {
+            throw new Error("should have rejected");
+        }, function (err) {
+            assertEqual(/no port given/.test(err.message), true);
+        });
+    });
+
+    testAsync("FB.serial.open() resolves with a port", function () {
+        return FB.serial.open({ port: "COM3", baud: 9600 }).then(function (res) {
+            assertEqual(res.ok, true);
         });
     });
 

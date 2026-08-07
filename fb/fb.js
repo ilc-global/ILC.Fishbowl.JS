@@ -424,6 +424,37 @@
         return Promise.resolve().then(function () { return self.runImportCSV_JSON(type, json); });
     };
 
+    // -- Hardware (2025.11 plugin and later) ----------------------------
+    //
+    // The hardware bridge answers differently from the data bridge, and the
+    // difference is easy to get wrong:
+    //
+    //   data:     executeJs("cb(" + json + ")")           -> already parsed
+    //   hardware: executeJs("cb(atob('" + b64 + "'))")    -> a JSON STRING
+    //
+    // Hardware base64-round-trips its payloads to sidestep escaping, so every
+    // hardware answer arrives as text and has to be parsed here. Streams do
+    // not use callbacks at all: barcode scans and inbound TCP bytes come
+    // through window CustomEvents.
+
+    /** Parse a hardware payload, which is always a JSON string. */
+    function _hwParse(text) {
+        if (typeof text !== 'string') return text;      // a future bridge that stops stringifying
+        try { return JSON.parse(text); }
+        catch (e) { return text; }
+    }
+
+    /** Run a hardware call that answers once, through a callback. */
+    JXBrowserAdapter.prototype.hwAsync = function (invoke) {
+        return _bridgeAsync(invoke).then(_hwParse);
+    };
+
+    /** Read a hardware call that answers synchronously with JSON text. */
+    JXBrowserAdapter.prototype.hwSync = function (name, args) {
+        if (!_hasBridgeMethod(this.client, name)) return null;
+        return _hwParse(this.client[name].apply(this.client, args || []));
+    };
+
     /**
      * The server's log messages.
      *
@@ -1553,6 +1584,21 @@
         enumerable: true
     });
 
+    /**
+     * Whether this build carries the hardware bridge — scale, scanner, serial
+     * and TCP. It arrived in the 2025.11 plugin, which targets Java 21; the
+     * 2024.12 build cannot have it. Detected, not assumed from the version,
+     * because a build can be anything.
+     */
+    Object.defineProperty(FB, 'hasHardware', {
+        get: function () {
+            _ensureInit();
+            return _adapter instanceof JXBrowserAdapter
+                && _hasBridgeMethod(_adapter.client, 'scaleListScales');
+        },
+        enumerable: true
+    });
+
     // ── Configuration ──
 
     /**
@@ -2289,6 +2335,8 @@
             'log', 'logError', 'logMessages', 'serverLogMessages',
             // Timezone
             'getTimeForServer', 'convertServerTimeToClient', 'convertClientTimeToServer',
+            // Hardware (2025.11 plugin and later; see FB.hasHardware)
+            'scale', 'scanner', 'serial', 'tcp', 'printNetworkZPL',
             // Developer
             'listMethods',
             // Config
@@ -2346,6 +2394,240 @@
         if (typeof fn !== 'function') throw new PlatformError('bi.' + method, FB.environment);
         var out = fn.apply(_adapter.w, args);
         return parse ? _safeParse(out) : out;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Hardware — scale, scanner, serial, TCP (2025.11 plugin and later)
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * Guard for every hardware call. A page checks FB.hasHardware first; this
+     * is what happens when it does not.
+     */
+    function _hwGuard(method) {
+        _ensureInit();
+        if (!FB.hasHardware) {
+            throw new PlatformError('hardware.' + method, FB.environment +
+                (FB.isJXBrowser ? ' (plugin build without the hardware bridge)' : ''));
+        }
+        return _adapter;
+    }
+
+    /**
+     * Subscribe to one of the hardware CustomEvents.
+     * @param {string} type - The event name, e.g. 'ilc-scan'.
+     * @param {function} handler - Receives the event's detail object.
+     * @returns {function} Call it to unsubscribe. A page that opens a device
+     *          and never lets go is a page that leaks across navigations.
+     */
+    function _hwOn(type, handler, map) {
+        var listener = function (e) { handler(map ? map(e.detail) : e.detail); };
+        window.addEventListener(type, listener);
+        return function () { window.removeEventListener(type, listener); };
+    }
+
+    /**
+     * USB weight scale.
+     *
+     * `start` streams a frame roughly every 100 ms until `stop`, and keeps
+     * streaming across an unplug — the poller reconnects on its own. Weight is
+     * always in pounds, whatever the scale reports in.
+     *
+     * @example
+     * if (FB.hasHardware) {
+     *     FB.scale.start(function (f) {
+     *         show(f.lbs, f.stable);
+     *     });
+     * }
+     */
+    FB.scale = {
+        /** Attached scales: [{vendorId, productId, label}]. @returns {Array} */
+        list: function () {
+            return _hwGuard('scale.list').hwSync('scaleListScales') || [];
+        },
+        /**
+         * Stream weight frames until stop() is called.
+         * @param {function} handler - Receives {lbs, stable, status, unit}.
+         */
+        start: function (handler) {
+            var adapter = _hwGuard('scale.start');
+            var name = '__fbScaleCb';
+            window[name] = function (json) { handler(_hwParse(json)); };
+            adapter.client.scaleStart(name);
+        },
+        /** Stop the poller and release the callback. */
+        stop: function () {
+            var adapter = _hwGuard('scale.stop');
+            adapter.client.scaleStop();
+            try { delete window.__fbScaleCb; }
+            catch (e) { window.__fbScaleCb = undefined; }
+        },
+        /** The last frame, without streaming. @returns {object} {lbs, stable, connected} */
+        snapshot: function () {
+            return _hwGuard('scale.snapshot').hwSync('scaleGetSnapshot');
+        },
+        /** The stored per-computer scale configuration. @returns {object} */
+        config: function () {
+            return _hwGuard('scale.config').hwSync('hardwareGetScaleConfig');
+        }
+    };
+
+    /**
+     * Barcode scanner.
+     *
+     * Scans do not come back through a callback — the plugin dispatches an
+     * `ilc-scan` window event, whichever capture mode is configured. So a page
+     * listens; it does not poll and it does not await.
+     *
+     * @example
+     * var off = FB.scanner.on('scan', function (s) { addLine(s.raw); });
+     * // later: off();
+     */
+    FB.scanner = {
+        /**
+         * Listen for scans.
+         * @param {string} event - Only 'scan' today.
+         * @param {function} handler - Receives {raw, symbology, aim_id, source, timestamp}.
+         * @returns {function} Unsubscribe.
+         */
+        on: function (event, handler) {
+            if (event !== 'scan') throw new Error('FB.scanner.on(): unknown event "' + event + '"');
+            return _hwOn('ilc-scan', handler);
+        },
+        /** 'active' or 'inactive'. @returns {string} */
+        status: function () {
+            return _hwGuard('scanner.status').hwSync('scannerGetStatus');
+        },
+        /**
+         * Open a scanner. With a port, the serial transport; without one, the
+         * first USB HID scanner found.
+         * @param {string} [port]  @param {number} [baud]
+         */
+        open: function (port, baud) {
+            _hwGuard('scanner.open').client.scannerOpen(port || '', baud || 0);
+        },
+        /** Close every scanner transport. */
+        close: function () {
+            _hwGuard('scanner.close').client.scannerClose();
+        },
+        /**
+         * Forward a keyboard-wedge capture so it arrives as an 'ilc-scan' like
+         * any other. For pages that own an input the wedge types into.
+         * @param {string} text
+         */
+        dispatchKeyboardScan: function (text) {
+            _hwGuard('scanner.dispatchKeyboardScan').client.scannerDispatchKeyboardScan(text);
+        },
+        /** The stored per-computer scanner configuration. @returns {object} */
+        config: function () {
+            return _hwGuard('scanner.config').hwSync('hardwareGetScannerConfig');
+        }
+    };
+
+    /** Serial ports, for a scanner on COM or USB-CDC. */
+    FB.serial = {
+        /** Available ports: [{port, description}]. @returns {Array} */
+        list: function () {
+            return _hwGuard('serial.list').hwSync('serialListPorts') || [];
+        },
+        /**
+         * Open a port.
+         * @param {object} options - {port, baud, startChar, endChar}.
+         * @returns {Promise<object>} Resolves {ok:true}; rejects when it cannot open.
+         */
+        open: function (options) {
+            var adapter = _hwGuard('serial.open');
+            var json = JSON.stringify(options || {});
+            return adapter.hwAsync(function (cb) {
+                adapter.client.serialOpen(json, cb);
+            }).then(_hwCheck('serial.open'));
+        },
+        /** Close the port. */
+        close: function () {
+            _hwGuard('serial.close').client.serialClose();
+        },
+        /** 'open' or 'closed'. @returns {string} */
+        status: function () {
+            return _hwGuard('serial.status').hwSync('serialGetStatus');
+        }
+    };
+
+    /**
+     * TCP sockets — a network scale, or anything else that speaks over one.
+     *
+     * Inbound bytes arrive as an `ilc-tcp-data` window event carrying base64.
+     * FB.tcp.on('data', ...) decodes it, so a handler receives text and the
+     * raw base64 both.
+     */
+    FB.tcp = {
+        /**
+         * Connect.
+         * @param {string} host  @param {number} port
+         * @returns {Promise<string>} Resolves with the connection id.
+         */
+        connect: function (host, port) {
+            var adapter = _hwGuard('tcp.connect');
+            return adapter.hwAsync(function (cb) {
+                adapter.client.tcpConnect(host, port, cb);
+            }).then(_hwCheck('tcp.connect')).then(function (res) { return res.id; });
+        },
+        /**
+         * Send on an open connection.
+         * @param {string} id  @param {string} data - UTF-8 text.
+         * @returns {Promise<object>}
+         */
+        send: function (id, data) {
+            var adapter = _hwGuard('tcp.send');
+            return adapter.hwAsync(function (cb) {
+                adapter.client.tcpSend(id, data, cb);
+            }).then(_hwCheck('tcp.send'));
+        },
+        /** Close a connection. @param {string} id */
+        close: function (id) {
+            _hwGuard('tcp.close').client.tcpClose(id);
+        },
+        /** Open connections: [{id, connected}]. @returns {Array} */
+        list: function () {
+            return _hwGuard('tcp.list').hwSync('tcpListConnections') || [];
+        },
+        /**
+         * Listen for inbound bytes.
+         * @param {string} event - Only 'data' today.
+         * @param {function} handler - Receives {id, text, base64}.
+         * @returns {function} Unsubscribe.
+         */
+        on: function (event, handler) {
+            if (event !== 'data') throw new Error('FB.tcp.on(): unknown event "' + event + '"');
+            return _hwOn('ilc-tcp-data', handler, function (detail) {
+                var text = null;
+                try { text = atob(detail.base64); } catch (e) { /* not decodable */ }
+                return { id: detail.id, text: text, base64: detail.base64 };
+            });
+        }
+    };
+
+    /**
+     * Print ZPL straight to a networked label printer — connect, send, close.
+     * Port 9100 on most Zebras. For a local or system printer use FB.printZPL.
+     *
+     * @param {string} host  @param {number} port  @param {string} zpl
+     * @returns {object} {ok:true} or {ok:false, error}.
+     */
+    FB.printNetworkZPL = function (host, port, zpl) {
+        return _hwGuard('printNetworkZPL').hwSync('printNetworkZPL', [host, port, zpl]);
+    };
+
+    /**
+     * Turn the hardware bridge's {ok:false, error} into a rejection, so a
+     * failure to open a port reads like every other failure in this library.
+     */
+    function _hwCheck(method) {
+        return function (res) {
+            if (res && res.ok === false) {
+                throw new FBError('FB.' + method + '(): ' + (res.error || 'failed'));
+            }
+            return res;
+        };
     }
 
     FB.bi = {
