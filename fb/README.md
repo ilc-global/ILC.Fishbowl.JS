@@ -247,11 +247,32 @@ a page that opens a device and never lets go leaks across navigations.
 `FB.tcp.on('data')` decodes the event's base64 and hands the handler
 `{id, text, base64}`.
 
-**A scale frame's `unit` is not the unit of its value.** `lbs` is always pounds,
-whatever the scale reports in; `unit` names what the device itself is using.
-A Dymo reading 11.7 oz gives `{lbs: 0.7313, unit: "oz"}` — 0.7313 pounds, from
-a scale set to ounces. Rendering `f.lbs + ' ' + f.unit` prints a wrong number
-with a wrong unit. Verified against the hardware, 2026-08-06.
+A scale frame carries the weight in **both systems**, plus what the device
+itself is showing:
+
+```json
+{ "lbs": 2.5574, "kg": 1.16, "native": 1160,
+  "unit": "g", "system": "si", "stable": true, "status": 4 }
+```
+
+| Field | Meaning |
+|---|---|
+| `lbs` / `kg` | the same weight, in each system. Pick the one your customer thinks in |
+| `native` | the number on the scale's own display |
+| `unit` | the unit the **device** is set to — `lbs`, `oz`, `kg`, `g`, `mg`, `ct`, `unknown` |
+| `system` | `imperial`, `si`, or `unknown` |
+
+**`unit` describes the device, not the value of `lbs`.** Rendering
+`f.lbs + ' ' + f.unit` prints a wrong number with a wrong unit; use `f.native`
+when showing an operator what their scale reads, and `lbs`/`kg` for anything
+that is stored, priced, or shipped.
+
+An unrecognised unit gives `{lbs: 0, kg: 0, native: 0, unit: "unknown"}` — a
+reading a page can refuse. It is never a raw count in a field named `lbs`.
+
+Verified against a Dymo M25 on 2026-08-07: 1.160 kg reads
+`{lbs: 2.5574, kg: 1.16, native: 1160, unit: "g", system: "si"}`, and
+`FB.scale.snapshot()` agrees with the stream field for field.
 
 One-shot hardware calls that can fail — `FB.tcp.connect`, `FB.tcp.send`,
 `FB.serial.open` — reject when the bridge answers `{ok: false}`, so a failure

@@ -2207,6 +2207,24 @@
     };
 
     /**
+     * Every method the Java bridge carries, as its signature strings.
+     *
+     * This is the bridge's own answer, not fb.js's — FB.listMethods() reports
+     * what this library exposes, which is a different and usually smaller set.
+     * Use it to find out what a plugin build actually has: the two lists
+     * drifting is how a capability sits unused for a year.
+     *
+     * @returns {string[]} Signatures, or [] outside JXBrowser.
+     */
+    FB.listBridgeMethods = function () {
+        _ensureInit();
+        if (!(_adapter instanceof JXBrowserAdapter)) return [];
+        if (!_hasBridgeMethod(_adapter.client, 'listMethods')) return [];
+        var raw = _safeParse(_adapter.client.listMethods());
+        return Array.isArray(raw) ? raw : [];
+    };
+
+    /**
      * The Fishbowl server's own log messages. JXBrowser only.
      *
      * Returns an empty string elsewhere, and on a plugin build that does not
@@ -2338,7 +2356,7 @@
             // Hardware (2025.11 plugin and later; see FB.hasHardware)
             'scale', 'scanner', 'serial', 'tcp', 'printNetworkZPL',
             // Developer
-            'listMethods',
+            'listMethods', 'listBridgeMethods',
             // Config
             'configure', 'compat'
         ];

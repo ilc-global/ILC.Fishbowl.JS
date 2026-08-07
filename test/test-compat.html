@@ -119,6 +119,13 @@ tr:last-child td { border-bottom: none; }
         // Misspelled in the Java, and therefore here. FB.serverLogMessages()
         // is the correctly spelled wrapper over it.
         serverLogMessges: function () { return "server log line 1\nserver log line 2"; },
+        listMethods: function () {
+            return JSON.stringify([
+                "public String runQuery(String)",
+                "public String scaleListScales()",
+                "public void scaleStart(String)"
+            ]);
+        },
 
         // ── Hardware (2025.11 plugin) ──────────────────────────────────
         // Every hardware answer is a JSON STRING: the plugin base64-round-trips
@@ -133,7 +140,13 @@ tr:last-child td { border-bottom: none; }
             var n = 0;
             window.fb_client.__scaleTimer = setInterval(function () {
                 n++;
-                window[cb](JSON.stringify({ lbs: n * 1.5, stable: n > 1, status: 4, unit: "lbs" }));
+                // The real frame shape, measured on a Dymo M25: the weight in
+                // both systems, plus what the device's own display reads.
+                window[cb](JSON.stringify({
+                    lbs: n * 1.5, kg: +(n * 1.5 * 0.45359237).toFixed(4),
+                    native: n * 1.5, unit: "lbs", system: "imperial",
+                    stable: n > 1, status: 4
+                }));
             }, 10);
         },
         scaleStop: function () {
@@ -141,7 +154,10 @@ tr:last-child td { border-bottom: none; }
             window.fb_client.__scaleTimer = null;
         },
         scaleGetSnapshot: function () {
-            return JSON.stringify({ lbs: 4.5, stable: true, connected: true });
+            return JSON.stringify({
+                lbs: 4.5, kg: 2.0412, native: 4.5, unit: "lbs", system: "imperial",
+                stable: true, status: 4, connected: true
+            });
         },
         hardwareGetScaleConfig: function () { return JSON.stringify({ vendorId: 0, productId: 0 }); },
         hardwareGetScannerConfig: function () { return JSON.stringify({ mode: "hid", port: "", baud: 9600 }); },
@@ -522,6 +538,19 @@ tr:last-child td { border-bottom: none; }
         assertEqual(s.lbs, 4.5);
     });
 
+    test("a scale frame carries both systems and the device's own reading", function () {
+        // lbs and kg are always the same weight; unit and native describe the
+        // DEVICE. A page picks the system its customer thinks in and never
+        // touches a conversion factor — guessing one is what read 1.16 kg as
+        // 1160 lb against real hardware.
+        var s = FB.scale.snapshot();
+        assertEqual(typeof s.kg, "number", "kg present");
+        assertEqual(typeof s.native, "number", "native present");
+        assertEqual(Math.abs(s.lbs - s.kg * 2.20462262) < 0.01, true, "lbs and kg agree");
+        assertEqual(s.system, "imperial");
+        return s.lbs + " lb = " + s.kg + " kg";
+    });
+
     test("FB.scale.config() parses", function () {
         assertEqual(typeof FB.scale.config(), "object");
     });
@@ -587,6 +616,16 @@ tr:last-child td { border-bottom: none; }
         assertType(log, "string");
         assertEqual(/server log line 1/.test(log), true);
         return log.split("\n").length + " lines";
+    });
+
+    test("FB.listBridgeMethods() reports the BRIDGE's methods, not fb.js's", function () {
+        var bridge = FB.listBridgeMethods();
+        assertEqual(Array.isArray(bridge), true);
+        assertEqual(bridge.length, 3);
+        assertEqual(/scaleListScales/.test(bridge.join(" ")), true);
+        // The two lists answer different questions and must not be confused.
+        assertEqual(bridge.length === FB.listMethods().length, false, "distinct from FB.listMethods()");
+        return bridge.length + " bridge methods";
     });
 
     test("FB.listMethods() returns array of strings", function () {
