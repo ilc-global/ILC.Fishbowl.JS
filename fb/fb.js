@@ -2221,7 +2221,11 @@
         if (!(_adapter instanceof JXBrowserAdapter)) return [];
         if (!_hasBridgeMethod(_adapter.client, 'listMethods')) return [];
         var raw = _safeParse(_adapter.client.listMethods());
-        return Array.isArray(raw) ? raw : [];
+        if (!Array.isArray(raw)) return [];
+        // The bridge prepends a title and a documentation URL to its own list.
+        // They are not methods, and counting them overstates what the bridge
+        // carries — keep only the signatures.
+        return raw.filter(function (s) { return typeof s === 'string' && /^public\s/.test(s); });
     };
 
     /**
