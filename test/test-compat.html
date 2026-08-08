@@ -611,6 +611,15 @@ tr:last-child td { border-bottom: none; }
         }
     });
 
+    test("FB.getTimeForServer() with no zone uses the browser's own", function () {
+        // It used to hand undefined to the bridge, which threw an error whose
+        // message was "undefined" — found against a live client, 2026-08-08.
+        var t = FB.getTimeForServer();
+        assertType(t, "string");
+        assertEqual(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(t), true, "formatted, got " + t);
+        return t;
+    });
+
     test("FB.serverLogMessages() reads the bridge's misspelled method", function () {
         var log = FB.serverLogMessages();
         assertType(log, "string");

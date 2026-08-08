@@ -1319,6 +1319,12 @@
      * @param {string} tz - IANA timezone ID (e.g., "America/Los_Angeles") or abbreviation.
      * @returns {string}
      */
+    /** The browser's own IANA zone, for callers that pass none. */
+    function _localTimeZone() {
+        try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; }
+        catch (e) { return 'UTC'; }
+    }
+
     function _tzGetTimeForServer(tz) {
         try {
             var now = new Date();
@@ -2257,10 +2263,15 @@
      */
     FB.getTimeForServer = function (tz) {
         _ensureInit();
+        // Called with no zone, the bridge used to receive undefined and throw
+        // an error whose message was, literally, "undefined". Measured against
+        // a live client on 2026-08-08. Default to the browser's own zone: the
+        // caller who omits it means "where I am".
+        var zone = tz || _localTimeZone();
         if (_adapter instanceof JXBrowserAdapter) {
-            return _adapter.getTimeForServer(tz);
+            return _adapter.getTimeForServer(zone);
         }
-        return _tzGetTimeForServer(tz);
+        return _tzGetTimeForServer(zone);
     };
 
     /**
