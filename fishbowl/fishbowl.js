@@ -367,28 +367,68 @@
 
     var _schemas = {};
 
+    /**
+     * Some imports read different columns depending on the Fishbowl home
+     * country, and a row is built only from the columns its schema names. A
+     * schema without the right variant therefore drops those values in
+     * silence: the import succeeds and the order arrives with no tax.
+     *
+     * `regions` on a schema holds the alternative column sets. This resolves
+     * one into a schema the builder can use unchanged.
+     *
+     * @param {object} schema
+     * @param {object} [options]
+     * @param {string} [options.region] - 'us' (default), 'ca' or 'au'.
+     * @returns {object} the schema, or a copy carrying the region's columns
+     */
+    function _forRegion(schema, options) {
+        var region = options && options.region;
+        if (!schema || !region || !schema.regions || !schema.regions[region]) return schema;
+        var chosen = schema.regions[region];
+        var copy = {};
+        for (var k in schema) if (Object.prototype.hasOwnProperty.call(schema, k)) copy[k] = schema[k];
+        if (schema.structure === 'hierarchical') {
+            copy.header = {};
+            for (var h in schema.header) if (Object.prototype.hasOwnProperty.call(schema.header, h)) {
+                copy.header[h] = schema.header[h];
+            }
+            copy.header.columns = chosen.slice();
+        } else {
+            copy.columns = chosen.slice();
+        }
+        return copy;
+    }
+
     var FishbowlCSV = {
         CsvBuilder: CsvBuilder,
         Import: Import,
         sanitize: sanitize,
 
-        create: function (importType, data) {
+        create: function (importType, data, options) {
             var schema = _schemas[importType];
             if (!schema) throw new Error('Unknown import type: ' + importType);
-            return new Import(schema, data);
+            return new Import(_forRegion(schema, options), data);
         },
 
         listTypes: function () {
             return Object.keys(_schemas).sort();
         },
 
-        getSchema: function (importType) {
-            return _schemas[importType] || null;
+        /** The regions a type has alternative columns for, or an empty array. */
+        listRegions: function (importType) {
+            var schema = _schemas[importType];
+            return schema && schema.regions ? Object.keys(schema.regions).sort() : [];
         },
 
-        getColumns: function (importType) {
+        getSchema: function (importType, options) {
+            var schema = _schemas[importType];
+            return schema ? _forRegion(schema, options) : null;
+        },
+
+        getColumns: function (importType, options) {
             var schema = _schemas[importType];
             if (!schema) return null;
+            schema = _forRegion(schema, options);
             if (schema.structure === 'hierarchical') {
                 return {
                     header: schema.header.columns.slice(),
@@ -398,9 +438,10 @@
             return schema.columns.slice();
         },
 
-        getTemplate: function (importType) {
+        getTemplate: function (importType, options) {
             var schema = _schemas[importType];
             if (!schema) return null;
+            schema = _forRegion(schema, options);
             if (schema.structure === 'hierarchical') {
                 var hCols = schema.header.columns.map(CsvBuilder.escape).join(',');
                 var iCols = schema.item.columns.map(CsvBuilder.escape).join(',');
@@ -413,8 +454,8 @@
     function register(schema) {
         _schemas[schema.importType] = schema;
         // Create named factory: FishbowlCSV[schema.name](data)
-        FishbowlCSV[schema.name] = function (data) {
-            return new Import(schema, data);
+        FishbowlCSV[schema.name] = function (data, options) {
+            return new Import(_forRegion(schema, options), data);
         };
     }
 
@@ -791,6 +832,29 @@
             dynamicFields: [
                 { prefix: 'CFI-', prop: 'customFields' }
             ]
+        },
+        /*
+         * The sales order import reads different columns depending on the
+         * Fishbowl home country. Confirmed against a live installation:
+         *
+         *   us   the order's tax is TaxRateName, a line's is Taxable
+         *   ca   the order's tax is TaxCode, and so is a line's
+         *   au   as ca, plus TotalIncludesTax for GST-inclusive prices
+         *
+         * A row is built only from the columns its schema names, so building
+         * a Canadian or Australian order against the default set drops its tax
+         * without saying so: the import succeeds and the order has none. Pass
+         * { region: 'au' } to create(), getColumns() or the factory.
+         *
+         * CurrencyName, CurrencyRate and PriceIsHomeCurrency appear in all
+         * three. The published CSV specification lists them, the import reads
+         * them where currency conversion is switched on, and accepts and
+         * ignores them where it is not. Both behaviours were measured.
+         */
+        regions: {
+            us: ['Flag', 'SONum', 'Status', 'CustomerName', 'CustomerContact', 'BillToName', 'BillToAddress', 'BillToCity', 'BillToState', 'BillToZip', 'BillToCountry', 'ShipToName', 'ShipToAddress', 'ShipToCity', 'ShipToState', 'ShipToZip', 'ShipToCountry', 'ShipToResidential', 'CarrierName', 'TaxRateName', 'PriorityId', 'PONum', 'VendorPONum', 'Date', 'Salesman', 'ShippingTerms', 'PaymentTerms', 'FOB', 'Note', 'QuickBooksClassName', 'LocationGroupName', 'OrderDateScheduled', 'URL', 'CarrierService', 'CurrencyName', 'CurrencyRate', 'PriceIsHomeCurrency', 'DateExpired', 'Phone', 'Email', 'Category'],
+            ca: ['Flag', 'SONum', 'Status', 'CustomerName', 'CustomerContact', 'BillToName', 'BillToAddress', 'BillToCity', 'BillToState', 'BillToZip', 'BillToCountry', 'ShipToName', 'ShipToAddress', 'ShipToCity', 'ShipToState', 'ShipToZip', 'ShipToCountry', 'ShipToResidential', 'CarrierName', 'TaxCode', 'PriorityId', 'PONum', 'VendorPONum', 'Date', 'Salesman', 'ShippingTerms', 'PaymentTerms', 'FOB', 'Note', 'QuickBooksClassName', 'LocationGroupName', 'OrderDateScheduled', 'URL', 'CarrierService', 'CurrencyName', 'CurrencyRate', 'PriceIsHomeCurrency', 'DateExpired', 'Phone', 'Email', 'Category'],
+            au: ['Flag', 'SONum', 'Status', 'CustomerName', 'CustomerContact', 'BillToName', 'BillToAddress', 'BillToCity', 'BillToState', 'BillToZip', 'BillToCountry', 'ShipToName', 'ShipToAddress', 'ShipToCity', 'ShipToState', 'ShipToZip', 'ShipToCountry', 'ShipToResidential', 'CarrierName', 'TaxCode', 'PriorityId', 'TotalIncludesTax', 'PONum', 'VendorPONum', 'Date', 'Salesman', 'ShippingTerms', 'PaymentTerms', 'FOB', 'Note', 'QuickBooksClassName', 'LocationGroupName', 'OrderDateScheduled', 'URL', 'CarrierService', 'CurrencyName', 'CurrencyRate', 'PriceIsHomeCurrency', 'DateExpired', 'Phone', 'Email', 'Category']
         }
     });
 
