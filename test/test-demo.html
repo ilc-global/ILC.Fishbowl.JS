@@ -385,6 +385,41 @@ progress { width: 200px; }
         return t;
     });
 
+    test("FB.queryRawAsync() returns demo rows like queryAsync", function () {
+        return FB.queryRawAsync("SalesByTerritory").then(function (rows) {
+            assertEqual(rows.length, 4);
+            assertEqual(rows[0].State, "CA");
+            return rows.length + " rows";
+        });
+    });
+
+    test("FB.queryRaw() throws PlatformError in demo", function () {
+        try { FB.queryRaw("SalesByTerritory"); } catch (e) { assertEqual(e.name, "PlatformError"); return "PlatformError"; }
+        throw new Error("should have thrown");
+    });
+
+    test("FB.getServerNow/Today/TimeZoneId() use FB.configure({serverTimeZone})", function () {
+        FB.configure({ serverTimeZone: "America/Chicago" });
+        try {
+            assertEqual(FB.getServerTimeZoneId(), "America/Chicago");
+            var now = FB.getServerNow();
+            assertTrue(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(now), "format");
+            assertEqual(now.slice(0, 10), FB.getServerToday());
+            var info = FB.getServerTimeInfo();
+            assertEqual(info.server_timezone_source, "configured");
+            assertTrue(info.server_offset_minutes === -300 || info.server_offset_minutes === -360, "Chicago offset, got " + info.server_offset_minutes);
+            assertEqual(FB.hasServerTime, false, "no bridge in demo");
+            return now + " " + info.server_offset_minutes;
+        } finally {
+            FB.configure({ serverTimeZone: null });
+        }
+    });
+
+    test("FB.getServerTimeZoneId() defaults to the browser's zone", function () {
+        assertEqual(FB.getServerTimeZoneId(), Intl.DateTimeFormat().resolvedOptions().timeZone);
+        assertEqual(FB.getServerTimeInfo().server_timezone_source, "browser");
+    });
+
     // ═══════════════════════════════════════════════════════════════
     // listMethods
     // ═══════════════════════════════════════════════════════════════

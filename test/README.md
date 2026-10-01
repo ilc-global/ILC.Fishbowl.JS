@@ -1,6 +1,6 @@
 # fb.js Test Suite
 
-146 tests across 3 test pages covering JXBrowser, Demo, and Web adapters.
+166 tests across 3 test pages covering JXBrowser, Demo, and Web adapters.
 
 ## Running Tests
 
@@ -9,10 +9,10 @@
 Requires Node.js and Puppeteer (`npm install puppeteer`).
 
 ```bash
-node run-tests.js              # run all 146 tests
-node run-tests.js compat       # run test-compat.html only (78 tests)
-node run-tests.js demo         # run test-demo.html only (37 tests)
-node run-tests.js web          # run test-web.html only (31 tests)
+node run-tests.js              # run all 166 tests
+node run-tests.js compat       # run test-compat.html only (93 tests)
+node run-tests.js demo         # run test-demo.html only (41 tests)
+node run-tests.js web          # run test-web.html only (32 tests)
 ```
 
 Exit code: `0` if all tests pass, `1` if any fail. The web suite automatically starts and stops the mock server.
@@ -27,7 +27,7 @@ Open HTML files directly for interactive debugging:
 
 ## Test Pages
 
-### test-compat.html — 78 tests
+### test-compat.html — 93 tests
 
 Tests the JXBrowserAdapter using a fake `window.fb_client` object. Covers:
 
@@ -39,9 +39,10 @@ Tests the JXBrowserAdapter using a fake `window.fb_client` object. Covers:
 - Platform-only methods: `hyperLink`, `reloadObject`, `runScheduledTask`, `previewReport`, reports, printing
 - Logging: `log`, `logError`, `logMessages`
 - Timezone: `getTimeForServer`, `convertServerTimeToClient`, `convertClientTimeToServer`
+- Server time: `hasServerTime`, `getServerNow`/`Today`/`TimeZoneId`/`TimeInfo`, `queryRaw`/`queryRawAsync` (older build throws, newer uses the raw bridge calls)
 - `FB.compat()` globals: `fb_query`, `setStatus`, `setProgress`, `getSQL`
 
-### test-demo.html — 37 tests
+### test-demo.html — 41 tests
 
 Tests the DemoAdapter with inline demo data. Covers:
 
@@ -52,7 +53,7 @@ Tests the DemoAdapter with inline demo data. Covers:
 - Query matching logic: script tag ID → exact key → substring → empty array
 - UI methods in demo mode
 
-### test-web.html — 31 tests
+### test-web.html — 32 tests
 
 Tests the WebAdapter against the mock server over HTTP. Covers:
 

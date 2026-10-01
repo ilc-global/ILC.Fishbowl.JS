@@ -108,6 +108,7 @@ Call `FB.configure(opts)` before any data methods. All options are optional.
 | `progressElement` | `string` | `'#fb-progress'` | CSS selector for the progress bar element |
 | `onPlatformOnly` | `string` | `'warn'` | Behavior for JXBrowser-only methods: `'warn'`, `'silent'`, or `'throw'` |
 | `requestTimeout` | `number` | `30000` | Timeout in ms for WebAdapter HTTP requests |
+| `serverTimeZone` | `string\|null` | `null` | IANA zone that `getServer*` report outside JXBrowser (web/demo); `null` = browser zone |
 
 ## API Reference
 
@@ -121,12 +122,14 @@ Call `FB.configure(opts)` before any data methods. All options are optional.
 | `FB.isWeb` | `boolean` | `true` if running in web mode |
 | `FB.isDemo` | `boolean` | `true` if running in demo mode |
 | `FB.bridgeVersion` | `string\|null` | Bridge version: `'2024'`, `'2025'`, or `null` |
+| `FB.hasServerTime` | `boolean` | `true` when the CloudPages build has server time support (`getServerNow`, raw queries) |
 
 ### Data Operations
 
 | Method | Sync | Async | Description |
 |---|---|---|---|
 | `query(sql, params?)` | JXB | All | Execute a SQL query |
+| `queryRaw(sql, params?)` | JXB¹ | All¹ | Execute a SQL query; datetimes come back exactly as stored (see [Timezone](#timezone)) |
 | `restApi(method, path, body?)` | JXB | All | Call the REST API |
 | `legacyApi(type, payload)` | JXB | All | Call the legacy JSON API |
 | `importCSV(type, csv)` | JXB | All | Import CSV string data |
@@ -285,11 +288,36 @@ to open a port reads like every other failure in this library.
 
 ### Timezone
 
+Fishbowl stores every DATETIME as the **Fishbowl server's wall clock**, with no zone attached. Two other clocks can disagree with it:
+- **MySQL `NOW()`** runs on the database host's clock, which is often UTC.
+- **The browser's `new Date()`** runs on the PC's Windows zone.
+
+`query()` also hands datetimes back **shifted into the client's zone**: `2026-12-01 08:00:00` stored by a Central server reads back as `2026-12-01 07:00:00.0` on a Phoenix client.
+
+To keep everything in server time:
+- **Write** server time: use `getServerNow()` / `getServerToday()` instead of `NOW()`, `CURDATE()` or `new Date()`.
+- **Read** with `queryRaw()` / `queryRawAsync()` and display the values as-is. Don't pass them to `new Date(...)`, which reads them as browser-local time, and don't append `Z`.
+- **Compare** "has it started yet?" against `getServerNow()`.
+
 | Method | Platform | Description |
 |---|---|---|
-| `getTimeForServer(tz?)` | All | Get current time formatted for the server |
-| `convertServerTimeToClient(serverDatetimeStr, serverTz)` | All | Convert server datetime to client timezone |
-| `convertClientTimeToServer(clientDatetimeStr, serverTz)` | All | Convert client datetime to server timezone |
+| `getServerNow()` | All¹ | Server wall clock `"yyyy-MM-dd HH:mm:ss"` |
+| `getServerToday()` | All¹ | Server date `"yyyy-MM-dd"` |
+| `getServerTimeZoneId()` | All¹ | Server zone, e.g. `"America/Chicago"` (`"GMT-05:00"` when only measured) |
+| `getServerTimeInfo(refresh?)` | All¹ | `{server_timezone_id, server_timezone_source, dst_safe, server_now, server_today, server_offset_minutes, sql_now_rewrite, client_jvm_timezone_id}` |
+| `getTimeForServer(tz?)` | All | Current time in `tz`. Omitted: the server's zone when `FB.hasServerTime`, else the browser's |
+| `convertServerTimeToClient(serverDatetimeStr, serverTz?)` | All | Convert server datetime to browser-local time. `serverTz` defaults to `getServerTimeZoneId()` |
+| `convertClientTimeToServer(clientDatetimeStr, serverTz?)` | All | Convert browser-local datetime to server time. `serverTz` defaults to `getServerTimeZoneId()` |
+
+¹ **Platform notes:**
+- **JXBrowser:** needs a CloudPages build with server time support (check `FB.hasServerTime`). Older builds throw `PlatformError` rather than return shifted times.
+- **Web / Demo:** `queryRawAsync` is the same request as `queryAsync`, because the backend reads MySQL directly. The `getServer*` methods are computed in the browser from `FB.configure({ serverTimeZone })`, or from the browser's zone if that isn't set.
+- **BI Script:** not available.
+
+**Where the server zone comes from (JXBrowser):**
+- **Preferred:** the `ILC_SERVER_TZ` sysproperty (an IANA id), which handles daylight saving (`dst_safe: true`).
+- **Fallback:** a fixed offset measured from the server's clock (`server_timezone_source: "measured"`, `dst_safe: false`). It's correct for "now", but not for dates on the other side of a DST change.
+- **Caching:** the plugin caches the value for 10 minutes. `getServerTimeInfo(true)` re-reads it.
 
 ### Utilities
 

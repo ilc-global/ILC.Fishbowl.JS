@@ -620,6 +620,111 @@ tr:last-child td { border-bottom: none; }
         return t;
     });
 
+    // ── Server time (CloudPages builds with ServerTime) ────────────
+    // The mock starts as an OLDER build without it; the methods are attached,
+    // tested, and removed again so the other tests see the original mock.
+
+    var SERVER_TIME_BRIDGE = {
+        getServerNow: function () { return "2026-10-01 11:29:43"; },
+        getServerToday: function () { return "2026-10-01"; },
+        getServerTimeZoneId: function () { return "America/Chicago"; },
+        getServerTimeInfo: function () {
+            return JSON.stringify({ server_timezone_id: "America/Chicago", server_timezone_source: "sysproperty",
+                dst_safe: true, server_now: "2026-10-01 11:29:43", server_today: "2026-10-01",
+                server_offset_minutes: -300, sql_now_rewrite: false, client_jvm_timezone_id: "America/Phoenix" });
+        },
+        refreshServerTimeInfo: function () { window.__refreshed = true; return this.getServerTimeInfo(); },
+        runQueryRaw: function (sql) { window.__rawCall = ["runQueryRaw", sql]; return JSON.stringify([{ id: 1, dt: "2026-12-01 08:00:00" }]); },
+        runQueryParametersRaw: function (sql, json) { window.__rawCall = ["runQueryParametersRaw", sql, json]; return JSON.stringify([{ id: 2, dt: "2026-12-01 08:00:00" }]); },
+        runQueryParametersRawAsync: function (sql, json, cb) {
+            window.__rawCall = ["runQueryParametersRawAsync", sql, json];
+            setTimeout(function () { window[cb](JSON.stringify([{ id: 3, dt: "2026-12-01 08:00:00" }])); }, 0);
+        }
+    };
+    function withServerTime(fn) {
+        Object.keys(SERVER_TIME_BRIDGE).forEach(function (k) { window.fb_client[k] = SERVER_TIME_BRIDGE[k]; });
+        try { return fn(); }
+        finally { Object.keys(SERVER_TIME_BRIDGE).forEach(function (k) { delete window.fb_client[k]; }); }
+    }
+
+    test("FB.hasServerTime is false on an older build", function () {
+        assertEqual(FB.hasServerTime, false);
+    });
+
+    test("FB.queryRaw() on an older build throws instead of returning shifted times", function () {
+        try { FB.queryRaw("SELECT dt FROM t"); }
+        catch (e) {
+            assertEqual(e.name, "PlatformError");
+            assertEqual(/server time support/.test(e.message), true, e.message);
+            return e.message;
+        }
+        throw new Error("should have thrown");
+    });
+
+    test("FB.getServerNow() on an older build throws", function () {
+        try { FB.getServerNow(); } catch (e) { assertEqual(e.name, "PlatformError"); return "PlatformError"; }
+        throw new Error("should have thrown");
+    });
+
+    test("FB.listMethods() flags server-time methods on an older build", function () {
+        var m = FB.listMethods().filter(function (x) { return /server time support/.test(x); });
+        assertEqual(m.length, 6, "queryRaw, queryRawAsync, 4 getters");
+        return m.length + " flagged";
+    });
+
+    test("FB.hasServerTime is true when the bridge has getServerNow", function () {
+        return withServerTime(function () { assertEqual(FB.hasServerTime, true); });
+    });
+
+    test("FB.getServerNow/Today/TimeZoneId() read the bridge", function () {
+        return withServerTime(function () {
+            assertEqual(FB.getServerNow(), "2026-10-01 11:29:43");
+            assertEqual(FB.getServerToday(), "2026-10-01");
+            assertEqual(FB.getServerTimeZoneId(), "America/Chicago");
+        });
+    });
+
+    test("FB.getServerTimeInfo() parses; refresh calls refreshServerTimeInfo", function () {
+        return withServerTime(function () {
+            window.__refreshed = false;
+            var info = FB.getServerTimeInfo();
+            assertEqual(info.server_timezone_id, "America/Chicago");
+            assertEqual(info.dst_safe, true);
+            assertEqual(window.__refreshed, false);
+            FB.getServerTimeInfo(true);
+            assertEqual(window.__refreshed, true, "refresh");
+        });
+    });
+
+    test("FB.queryRaw() uses runQueryRaw / runQueryParametersRaw", function () {
+        return withServerTime(function () {
+            var rows = FB.queryRaw("SELECT dt FROM t");
+            assertEqual(window.__rawCall[0], "runQueryRaw");
+            assertEqual(rows[0].dt, "2026-12-01 08:00:00");
+            FB.queryRaw("SELECT dt FROM t WHERE id = :id", { id: "2" });
+            assertEqual(window.__rawCall[0], "runQueryParametersRaw");
+            assertEqual(JSON.parse(window.__rawCall[2]).id, "2");
+        });
+    });
+
+    test("FB.getTimeForServer() with no zone uses the SERVER's when supported", function () {
+        return withServerTime(function () {
+            assertEqual(FB.getTimeForServer(), "2026-10-01 11:29:43");
+            // An explicit zone still goes where it is told.
+            assertEqual(FB.getTimeForServer("America/New_York"), "2024-06-15 10:30:00");
+        });
+    });
+
+    test("FB.convertClientTimeToServer() defaults its zone to the server's", function () {
+        return withServerTime(function () {
+            var explicit = FB.convertClientTimeToServer("2026-12-01 08:00:00", "America/Chicago");
+            assertEqual(FB.convertClientTimeToServer("2026-12-01 08:00:00"), explicit);
+            assertEqual(FB.convertServerTimeToClient("2026-12-01 08:00:00"),
+                        FB.convertServerTimeToClient("2026-12-01 08:00:00", "America/Chicago"));
+            return explicit;
+        });
+    });
+
     test("FB.serverLogMessages() reads the bridge's misspelled method", function () {
         var log = FB.serverLogMessages();
         assertType(log, "string");
@@ -897,6 +1002,24 @@ tr:last-child td { border-bottom: none; }
     testAsync("FB.hasAccessRightAsync() resolves", function () {
         return FB.hasAccessRightAsync("ViewSO").then(function (has) {
             assertEqual(has, true);
+        });
+    });
+
+    testAsync("FB.queryRawAsync() uses the bridge's runQueryParametersRawAsync", function () {
+        Object.keys(SERVER_TIME_BRIDGE).forEach(function (k) { window.fb_client[k] = SERVER_TIME_BRIDGE[k]; });
+        function cleanup() { Object.keys(SERVER_TIME_BRIDGE).forEach(function (k) { delete window.fb_client[k]; }); }
+        return FB.queryRawAsync("SELECT dt FROM t").then(function (rows) {
+            cleanup();
+            assertEqual(window.__rawCall[0], "runQueryParametersRawAsync");
+            assertEqual(rows[0].dt, "2026-12-01 08:00:00");
+        }, function (e) { cleanup(); throw e; });
+    });
+
+    testAsync("FB.queryRawAsync() on an older build rejects with PlatformError", function () {
+        return FB.queryRawAsync("SELECT 1").then(function () {
+            throw new Error("should have rejected");
+        }, function (e) {
+            assertEqual(e.name, "PlatformError");
         });
     });
 

@@ -129,6 +129,14 @@ progress { width: 200px; }
         });
     });
 
+    test('FB.queryRawAsync() is the same request as queryAsync', function () {
+        return FB.queryRawAsync('SELECT * FROM SalesByTerritory').then(function (rows) {
+            assertEqual(Array.isArray(rows), true);
+            assertTrue(rows.length > 0, 'rows');
+            return rows.length + ' rows';
+        });
+    });
+
     test('FB.restApiAsync() returns response', function () {
         return FB.restApiAsync('GET', '/api/part').then(function (res) {
             assertEqual(res.http_code, '200');

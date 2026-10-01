@@ -47,9 +47,9 @@
      * @param {string} method - The method name that was called.
      * @param {string} environment - The current environment.
      */
-    function PlatformError(method, environment) {
-        var msg = 'FB.' + method + '() is not available in "' + environment + '" mode. ' +
-                  'Use FB.' + method + 'Async() for cross-platform support.';
+    function PlatformError(method, environment, message) {
+        var msg = message || ('FB.' + method + '() is not available in "' + environment + '" mode. ' +
+                  'Use FB.' + method + 'Async() for cross-platform support.');
         FBError.call(this, msg);
         this.name = 'PlatformError';
         this.method = method;
@@ -98,7 +98,8 @@
         statusElement: '#fb-status',
         progressElement: '#fb-progress',
         onPlatformOnly: 'warn',    // 'warn' | 'silent' | 'throw'
-        requestTimeout: 30000
+        requestTimeout: 30000,
+        serverTimeZone: null       // IANA id for FB.getServer* outside JXBrowser (web/demo); null = browser zone
     };
 
     // ═══════════════════════════════════════════════════════════════════
@@ -622,6 +623,64 @@
         return _tzGetTimeForServer(tz);
     };
 
+    // -- Server time & raw queries (CloudPages builds with ServerTime) --
+    //
+    // Fishbowl stores DATETIMEs as the Fishbowl server's wall clock. runQuery
+    // hands them back shifted into the client JVM's zone; the *Raw calls return
+    // them exactly as stored. Older builds lack these methods - they throw rather
+    // than quietly answer with shifted times.
+
+    JXBrowserAdapter.prototype.hasServerTime = function () {
+        return _hasBridgeMethod(this.client, 'getServerNow');
+    };
+
+    JXBrowserAdapter.prototype._requireServerTime = function (method) {
+        if (!this.hasServerTime()) {
+            throw new PlatformError(method, 'jxbrowser',
+                'FB.' + method + '() needs a CloudPages plugin build with server time support ' +
+                '(fb_client.getServerNow). Check FB.hasServerTime before calling it.');
+        }
+    };
+
+    /** @param {string} sql  @param {object} [params]  @returns {string} Raw JSON string */
+    JXBrowserAdapter.prototype.runQueryRaw = function (sql, params) {
+        this._requireServerTime('queryRaw');
+        if (params && Object.keys(params).length > 0) {
+            return this.client.runQueryParametersRaw(sql, JSON.stringify(params));
+        }
+        return this.client.runQueryRaw(sql);
+    };
+
+    /** @param {string} sql  @param {object} [params]  @returns {Promise<*>} */
+    JXBrowserAdapter.prototype.runQueryRawAsync = function (sql, params) {
+        var self = this;
+        this._requireServerTime('queryRawAsync');
+        if (_hasBridgeMethod(this.client, 'runQueryParametersRawAsync')) {
+            var json = JSON.stringify(params || {});
+            return _bridgeAsync(function (cb) {
+                self.client.runQueryParametersRawAsync(sql, json, cb);
+            });
+        }
+        return Promise.resolve().then(function () { return self.runQueryRaw(sql, params); });
+    };
+
+    JXBrowserAdapter.prototype.getServerTimeInfo = function (refresh) {
+        this._requireServerTime('getServerTimeInfo');
+        return _safeParse(refresh ? this.client.refreshServerTimeInfo() : this.client.getServerTimeInfo());
+    };
+    JXBrowserAdapter.prototype.getServerTimeZoneId = function () {
+        this._requireServerTime('getServerTimeZoneId');
+        return this.client.getServerTimeZoneId();
+    };
+    JXBrowserAdapter.prototype.getServerNow = function () {
+        this._requireServerTime('getServerNow');
+        return this.client.getServerNow();
+    };
+    JXBrowserAdapter.prototype.getServerToday = function () {
+        this._requireServerTime('getServerToday');
+        return this.client.getServerToday();
+    };
+
     // ═══════════════════════════════════════════════════════════════════
     // [6] WebAdapter
     // ═══════════════════════════════════════════════════════════════════
@@ -632,6 +691,12 @@
      * @constructor
      */
     function WebAdapter() {}
+
+    // The web backend reads MySQL itself, so its rows already carry the stored
+    // DATETIME values; a raw query is the same request.
+    WebAdapter.prototype.runQueryRawAsync = function (sql, params) {
+        return this.runQueryAsync(sql, params);
+    };
 
     // -- Async Data Operations --
 
@@ -1013,6 +1078,11 @@
         return this._matchQuery(sql, params);
     };
 
+    // Demo data is already literal strings.
+    DemoAdapter.prototype.runQueryRawAsync = function (sql, params) {
+        return this.runQueryAsync(sql, params);
+    };
+
     DemoAdapter.prototype.restApiCallAsync = function () {
         return this._ensureLoaded().then(function (data) {
             return (data && data.restApi) || { http_code: '200', response: '{}' };
@@ -1281,6 +1351,14 @@
     BiScriptAdapter.prototype.printMultipleReports = function () { _biUnsupported('printMultipleReports'); };
     BiScriptAdapter.prototype.printZPL = function () { _biUnsupported('printZPL'); };
     BiScriptAdapter.prototype.getTimeForServer = function () { _biUnsupported('getTimeForServer'); };
+    BiScriptAdapter.prototype.runQueryRaw = function () { _biUnsupported('queryRaw'); };
+    BiScriptAdapter.prototype.runQueryRawAsync = function () {
+        return Promise.reject(new PlatformError('queryRawAsync', 'biscript', 'FB.queryRawAsync() is not available in BI Script.'));
+    };
+    BiScriptAdapter.prototype.getServerTimeInfo = function () { _biUnsupported('getServerTimeInfo'); };
+    BiScriptAdapter.prototype.getServerTimeZoneId = function () { _biUnsupported('getServerTimeZoneId'); };
+    BiScriptAdapter.prototype.getServerNow = function () { _biUnsupported('getServerNow'); };
+    BiScriptAdapter.prototype.getServerToday = function () { _biUnsupported('getServerToday'); };
 
     // -- Logging --
     BiScriptAdapter.prototype.logInformation = function (msg) { _logBuffer.push(msg); console.log('[FB BI] ' + msg); };
@@ -1349,6 +1427,38 @@
                    String(d.getMinutes()).padStart(2, '0') + ':' +
                    String(d.getSeconds()).padStart(2, '0');
         }
+    }
+
+    /**
+     * Server-time answers for environments without the Java bridge (web, demo):
+     * computed in the browser from FB.configure({serverTimeZone}), else the
+     * browser's own zone.
+     * @returns {{zone: string, source: string}}
+     */
+    function _configuredServerZone() {
+        if (_config.serverTimeZone) return { zone: _config.serverTimeZone, source: 'configured' };
+        return { zone: _localTimeZone(), source: 'browser' };
+    }
+
+    function _tzOffsetMinutes(tz) {
+        var now = Date.now();
+        var wall = _tzGetTimeAtMs(now, tz).split(/[- :]/);
+        var asUtc = Date.UTC(+wall[0], +wall[1] - 1, +wall[2], +wall[3] % 24, +wall[4], +wall[5]);
+        return Math.round((asUtc - Math.floor(now / 1000) * 1000) / 60000);
+    }
+
+    function _browserServerTimeInfo() {
+        var z = _configuredServerZone();
+        var now = _tzGetTimeForServer(z.zone);
+        return {
+            server_timezone_id: z.zone,
+            server_timezone_source: z.source,
+            dst_safe: true,
+            server_now: now,
+            server_today: now.slice(0, 10),
+            server_offset_minutes: _tzOffsetMinutes(z.zone),
+            sql_now_rewrite: false
+        };
     }
 
     /**
@@ -1605,6 +1715,19 @@
         enumerable: true
     });
 
+    /**
+     * Whether this CloudPages build carries server time support: getServerNow,
+     * getServerTimeInfo and the raw (unshifted) query methods. Detected, not
+     * assumed from the version.
+     */
+    Object.defineProperty(FB, 'hasServerTime', {
+        get: function () {
+            _ensureInit();
+            return _adapter instanceof JXBrowserAdapter && _adapter.hasServerTime();
+        },
+        enumerable: true
+    });
+
     // ── Configuration ──
 
     /**
@@ -1619,6 +1742,7 @@
      * @param {string} [opts.progressElement='#fb-progress'] - CSS selector for progress element.
      * @param {string} [opts.onPlatformOnly='warn'] - 'warn'|'silent'|'throw'
      * @param {number} [opts.requestTimeout=30000] - Timeout in ms for web requests.
+     * @param {string} [opts.serverTimeZone] - IANA zone FB.getServer* report outside JXBrowser.
      */
     FB.configure = function (opts) {
         if (!opts) return;
@@ -1661,6 +1785,38 @@
     FB.queryAsync = function (sql, params) {
         _ensureInit();
         return _adapter.runQueryAsync(sql, params).then(function (result) {
+            return _parseAndCheck(result, true, sql);
+        });
+    };
+
+    /**
+     * Like FB.query, but DATETIME/DATE/TIME columns come back exactly as stored
+     * ("yyyy-MM-dd HH:mm:ss" server wall clock) instead of shifted into the
+     * client's zone. Show them as-is; don't pass them to new Date().
+     * JXBrowser only; needs FB.hasServerTime.
+     * @param {string} sql - SQL query string.
+     * @param {object} [params] - Query parameters.
+     * @returns {Array|object} Parsed result array, or {is_error, error_msg} on failure.
+     */
+    FB.queryRaw = function (sql, params) {
+        _ensureInit();
+        _syncGuard('queryRaw');
+        var raw = _adapter.runQueryRaw(sql, params);
+        return _parseAndCheck(raw, false, sql);
+    };
+
+    /**
+     * Async FB.queryRaw. JXBrowser (needs FB.hasServerTime), web and demo.
+     * @param {string} sql - SQL query string.
+     * @param {object} [params] - Query parameters.
+     * @returns {Promise<Array>} Rejects with QueryError on failure.
+     */
+    FB.queryRawAsync = function (sql, params) {
+        _ensureInit();
+        var pending;
+        try { pending = _adapter.runQueryRawAsync(sql, params); }
+        catch (e) { return Promise.reject(e); }
+        return pending.then(function (result) {
             return _parseAndCheck(result, true, sql);
         });
     };
@@ -2256,17 +2412,22 @@
     // ═══════════════════════════════════════════════════════════════
 
     /**
-     * Get current time formatted for the server's timezone.
-     * On JXBrowser 2024, may delegate to Java for extra accuracy.
-     * @param {string} tz - Server timezone ID (e.g., "America/Los_Angeles", "PST").
+     * Get current time formatted for a timezone.
+     * On JXBrowser, may delegate to Java for extra accuracy.
+     * @param {string} [tz] - Timezone ID (e.g., "America/Los_Angeles"). Omitted:
+     *     the Fishbowl server's zone when FB.hasServerTime, else the browser's.
      * @returns {string} "yyyy-MM-dd HH:mm:ss"
      */
     FB.getTimeForServer = function (tz) {
         _ensureInit();
         // Called with no zone, the bridge used to receive undefined and throw
-        // an error whose message was, literally, "undefined". Measured against
-        // a live client on 2026-08-08. Default to the browser's own zone: the
-        // caller who omits it means "where I am".
+        // an error whose message was, literally, "undefined" (measured against
+        // a live client on 2026-08-08). With server time support the omitted
+        // zone means the server's - the one Fishbowl stores times in. Older
+        // builds keep the browser's own zone.
+        if (!tz && FB.hasServerTime) {
+            return _adapter.getServerNow();
+        }
         var zone = tz || _localTimeZone();
         if (_adapter instanceof JXBrowserAdapter) {
             return _adapter.getTimeForServer(zone);
@@ -2275,26 +2436,80 @@
     };
 
     /**
+     * The Fishbowl server's zone and clock.
+     * JXBrowser: from the bridge (sysproperty ILC_SERVER_TZ, else a measured
+     * fixed offset - dst_safe false). Web/demo: FB.configure({serverTimeZone})
+     * or the browser's zone. Not available in BI Script.
+     * @param {boolean} [refresh] - Re-read the server setting (JXBrowser caches 10 min).
+     * @returns {{server_timezone_id: string, server_timezone_source: string, dst_safe: boolean,
+     *            server_now: string, server_today: string, server_offset_minutes: number,
+     *            sql_now_rewrite: boolean, client_jvm_timezone_id: (string|undefined), error: (string|undefined)}}
+     */
+    FB.getServerTimeInfo = function (refresh) {
+        _ensureInit();
+        if (_adapter instanceof JXBrowserAdapter || _adapter instanceof BiScriptAdapter) {
+            return _adapter.getServerTimeInfo(!!refresh);
+        }
+        return _browserServerTimeInfo();
+    };
+
+    /** @returns {string} Server zone id, e.g. "America/Chicago" (or "GMT-05:00" when only measured). */
+    FB.getServerTimeZoneId = function () {
+        _ensureInit();
+        if (_adapter instanceof JXBrowserAdapter || _adapter instanceof BiScriptAdapter) {
+            return _adapter.getServerTimeZoneId();
+        }
+        return _configuredServerZone().zone;
+    };
+
+    /** @returns {string} Server wall clock "yyyy-MM-dd HH:mm:ss" - use instead of NOW() / new Date(). */
+    FB.getServerNow = function () {
+        _ensureInit();
+        if (_adapter instanceof JXBrowserAdapter || _adapter instanceof BiScriptAdapter) {
+            return _adapter.getServerNow();
+        }
+        return _tzGetTimeForServer(_configuredServerZone().zone);
+    };
+
+    /** @returns {string} Server date "yyyy-MM-dd" - use instead of CURDATE() / toISOString(). */
+    FB.getServerToday = function () {
+        _ensureInit();
+        if (_adapter instanceof JXBrowserAdapter || _adapter instanceof BiScriptAdapter) {
+            return _adapter.getServerToday();
+        }
+        return _tzGetTimeForServer(_configuredServerZone().zone).slice(0, 10);
+    };
+
+    /**
      * Convert a datetime string from server timezone to client local time.
      * @param {string} serverDatetimeStr - "yyyy-MM-dd HH:mm:ss" from the server.
-     * @param {string} serverTz - Server timezone ID.
+     * @param {string} [serverTz] - Server timezone ID. Default: FB.getServerTimeZoneId().
      * @returns {string} "yyyy-MM-dd HH:mm:ss" in client local time.
      */
     FB.convertServerTimeToClient = function (serverDatetimeStr, serverTz) {
         _ensureInit();
-        return _tzConvertServerToClient(serverDatetimeStr, serverTz);
+        return _tzConvertServerToClient(serverDatetimeStr, serverTz || _defaultServerZone());
     };
 
     /**
      * Convert a client local datetime to server timezone.
      * @param {string} clientDatetimeStr - "yyyy-MM-dd HH:mm:ss" in local time.
-     * @param {string} serverTz - Server timezone ID.
+     * @param {string} [serverTz] - Server timezone ID. Default: FB.getServerTimeZoneId().
      * @returns {string} "yyyy-MM-dd HH:mm:ss" in server timezone.
      */
     FB.convertClientTimeToServer = function (clientDatetimeStr, serverTz) {
         _ensureInit();
-        return _tzConvertClientToServer(clientDatetimeStr, serverTz);
+        return _tzConvertClientToServer(clientDatetimeStr, serverTz || _defaultServerZone());
     };
+
+    /** Server zone for the convert helpers; the browser's when nothing better is known. */
+    function _defaultServerZone() {
+        if (_adapter instanceof JXBrowserAdapter) {
+            return _adapter.hasServerTime() ? _adapter.getServerTimeZoneId() : _localTimeZone();
+        }
+        if (_adapter instanceof BiScriptAdapter) return _localTimeZone();
+        return _configuredServerZone().zone;
+    }
 
     // ═══════════════════════════════════════════════════════════════
     // [10] Compat Shim — FB.compat() installs global helpers
@@ -2345,9 +2560,9 @@
         var methods = [];
         var allMethods = [
             // Data - sync
-            'query', 'restApi', 'legacyApi', 'importCSV', 'importCSVFromJSON',
+            'query', 'queryRaw', 'restApi', 'legacyApi', 'importCSV', 'importCSVFromJSON',
             // Data - async
-            'queryAsync', 'restApiAsync', 'legacyApiAsync', 'importCSVAsync', 'importCSVFromJSONAsync',
+            'queryAsync', 'queryRawAsync', 'restApiAsync', 'legacyApiAsync', 'importCSVAsync', 'importCSVFromJSONAsync',
             // User/Context - sync
             'getCompanyName', 'getUsername', 'getUserEmail', 'getUserId',
             'getUserGroupIds', 'hasAccessRight', 'getPluginName', 'getModuleName', 'getObjectId',
@@ -2368,6 +2583,7 @@
             'log', 'logError', 'logMessages', 'serverLogMessages',
             // Timezone
             'getTimeForServer', 'convertServerTimeToClient', 'convertClientTimeToServer',
+            'getServerTimeInfo', 'getServerTimeZoneId', 'getServerNow', 'getServerToday',
             // Hardware (2025.11 plugin and later; see FB.hasHardware)
             'scale', 'scanner', 'serial', 'tcp', 'printNetworkZPL',
             // Developer
@@ -2377,7 +2593,7 @@
         ];
 
         var syncOnly = [
-            'query', 'restApi', 'legacyApi', 'importCSV', 'importCSVFromJSON',
+            'query', 'queryRaw', 'restApi', 'legacyApi', 'importCSV', 'importCSVFromJSON',
             'getCompanyName', 'getUsername', 'getUserEmail', 'getUserId',
             'getUserGroupIds', 'hasAccessRight', 'getPluginName', 'getModuleName', 'getObjectId',
             'getPluginData', 'savePluginData', 'deletePluginData'
@@ -2389,6 +2605,12 @@
             'printPDF', 'printReportPDF', 'printMergedReportsPDF', 'printMultipleReports', 'printZPL'
         ];
 
+        // Need the bridge's server time support in JXBrowser; computed in the browser on web/demo.
+        var serverTimeOnly = [
+            'queryRaw', 'queryRawAsync',
+            'getServerTimeInfo', 'getServerTimeZoneId', 'getServerNow', 'getServerToday'
+        ];
+
         allMethods.forEach(function (name) {
             var available = true;
             var note = '';
@@ -2398,6 +2620,16 @@
             if (syncOnly.indexOf(name) >= 0 && !inClient) {
                 available = false;
                 note = ' (in-client only - use ' + name + 'Async)';
+            }
+
+            if (serverTimeOnly.indexOf(name) >= 0) {
+                if (_environment === 'biscript') {
+                    available = false;
+                    note = ' (not available in BI Script)';
+                } else if (_environment === 'jxbrowser' && !FB.hasServerTime) {
+                    available = false;
+                    note = ' (needs a CloudPages build with server time support)';
+                }
             }
 
             if (platformOnly.indexOf(name) >= 0 && _environment !== 'jxbrowser') {
